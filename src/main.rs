@@ -36,9 +36,12 @@
  *    Frank Pagliughi - initial implementation and documentation
  *******************************************************************************/
 
+mod data;
+
 use futures::{executor::block_on, stream::StreamExt};
 use paho_mqtt as mqtt;
 use std::{env, process, time::Duration};
+use crate::data::LogEvent;
 
 // The topics to which we subscribe.
 const TOPICS: &[&str] = &["klimalogger", "hello"];
@@ -103,7 +106,8 @@ fn main() {
 
         while let Some(msg_opt) = strm.next().await {
             if let Some(msg) = msg_opt {
-                println!("{}", msg);
+                let result: serde_json::Result<LogEvent> = serde_json::from_slice(msg.payload());
+                println!("{:?}", result.unwrap());
             }
             else {
                 // A "None" means we were disconnected. Try to reconnect...
