@@ -81,17 +81,17 @@ fn main() {
         let mut strm = cli.get_stream(25);
 
         // Define the set of options for the connection
-        let lwt = mqtt::Message::new(
-            "test/lwt",
-            "[LWT] Async subscriber lost connection",
-            mqtt::QOS_1,
-        );
+        // let lwt = mqtt::Message::new(
+        //     "test/lwt",
+        //     "[LWT] Async subscriber lost connection",
+        //     mqtt::QOS_1,
+        // );
 
         // Create the connect options, explicitly requesting MQTT v3.x
         let conn_opts = mqtt::ConnectOptionsBuilder::new_v3()
             .keep_alive_interval(Duration::from_secs(30))
             .clean_session(false)
-            .will_message(lwt)
+         //   .will_message(lwt)
             .finalize();
 
         // Make the connection to the broker

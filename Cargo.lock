@@ -93,16 +93,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b"
 
 [[package]]
-name = "async-attributes"
-version = "1.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3203e79f4dd9bdda415ed03cf14dae5a2bf775c683a00f94e9cd1faf0f596e5"
-dependencies = [
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
 name = "async-channel"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -150,7 +140,6 @@ dependencies = [
  "blocking",
  "futures-lite",
  "once_cell",
- "tokio",
 ]
 
 [[package]]
@@ -217,7 +206,6 @@ version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62565bb4402e926b29953c785397c6dc0391b7b446e45008b0049eb43cec6f5d"
 dependencies = [
- "async-attributes",
  "async-channel",
  "async-global-executor",
  "async-io",
@@ -914,24 +902,10 @@ dependencies = [
  "chrono",
  "futures-util",
  "http",
- "influxdb_derive",
  "lazy_static",
  "regex",
- "serde",
- "serde_json",
  "surf",
  "thiserror",
-]
-
-[[package]]
-name = "influxdb_derive"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ac96b3660efd0cde32b0b20bc86cc93f33269cd9f6c97e759e0b0259b2133fb"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.38",
 ]
 
 [[package]]
@@ -1901,7 +1875,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f38200e3ef7995e5ef13baec2f432a6da0aa9ac495b2c0e8f3b7eec2c92d653"
 dependencies = [
  "backtrace",
- "num_cpus",
  "pin-project-lite",
 ]
 
