@@ -49,8 +49,6 @@ use paho_mqtt::QOS_1;
 const TOPICS: &[&str] = &["solar/#"];
 const QOS: &[i32] = &[QOS_1];
 
-/////////////////////////////////////////////////////////////////////////////
-
 fn main() {
     // Initialize the logger from the environment
     env_logger::init();
@@ -61,11 +59,9 @@ fn main() {
 
     println!("Connecting to the MQTT server at '{}'...", host);
 
-    // Create the client. Use a Client ID for a persistent session.
-    // A real system should try harder to use a unique ID.
     let create_opts = mqtt::CreateOptionsBuilder::new_v3()
         .server_uri(host)
-        .client_id("solar_test")
+        .client_id("solar_gateway")
         .finalize();
 
     // Create the client connection
@@ -80,21 +76,11 @@ fn main() {
         // Get message stream before connecting.
         let mut strm = cli.get_stream(25);
 
-        // Define the set of options for the connection
-        // let lwt = mqtt::Message::new(
-        //     "test/lwt",
-        //     "[LWT] Async subscriber lost connection",
-        //     mqtt::QOS_1,
-        // );
-
-        // Create the connect options, explicitly requesting MQTT v3.x
-        let conn_opts = mqtt::ConnectOptionsBuilder::new_v3()
+        let conn_opts = mqtt::ConnectOptionsBuilder::new_v5()
             .keep_alive_interval(Duration::from_secs(30))
             .clean_session(false)
-         //   .will_message(lwt)
             .finalize();
 
-        // Make the connection to the broker
         cli.connect(conn_opts).await?;
 
         println!("Subscribing to topics: {:?}", TOPICS);
@@ -107,7 +93,6 @@ fn main() {
         // disconnect. Therefore, when you kill this app (with a ^C or
         // whatever) the server will get an unexpected drop and then
         // should emit the LWT message.
-
 
         let mut timestamp: Option<Timestamp> = None;
         let mut point: Option<WriteQuery>;
@@ -134,14 +119,16 @@ fn main() {
                                 );
                             }
                             "device" => {
+                                // ignore device global data
                                 // println!("  device: {:}: {:?}", field, msg.payload_str())
                             }
                             "status" => {
                                 if field == "last_update" {
                                     let timestamp_string = msg.payload_str().to_string();
                                     timestamp = timestamp_string.parse().map(move |value| Seconds(value)).ok();
-                                    println!("{:?}", timestamp);
+                                    //println!("{:?}", timestamp);
                                 } else {
+                                    // ignore other status data
                                     // println!("  status: {:}: {:?}", field, msg.payload_str());
                                 }
                             }
@@ -157,20 +144,21 @@ fn main() {
                             }
                         }
                     } else {
-                         println!(" global {:}.{:}: {:?}", section, element, msg.payload_str())
+                        // global options -> ignore for now
+                        // println!(" global {:}.{:}: {:?}", section, element, msg.payload_str())
                     }
                 }
 
                 if let Some(point) = point {
                     println!("   -> {:?}", &point);
                     let result = client.query(point).await;
+                    if (result.is_err()) {
+                        println!("{:?}", result.err())
+                    }
                 }
-
-                // let result: serde_json::Result<LogEvent> = serde_json::from_slice(msg.payload());
-                // println!("{:?}", result.unwrap());
             } else {
                 // A "None" means we were disconnected. Try to reconnect...
-                println!("Lost connection. Attempting reconnect.");
+                println!("Lost connection. Attempting reconnect. {:?}", cli.is_connected());
                 while let Err(err) = cli.reconnect().await {
                     println!("Error reconnecting: {}", err);
                     // For tokio use: tokio::time::delay_for()
