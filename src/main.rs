@@ -152,7 +152,7 @@ fn main() {
                 if let Some(point) = point {
                     println!("   -> {:?}", &point);
                     let result = client.query(point).await;
-                    if (result.is_err()) {
+                    if result.is_err() {
                         println!("{:?}", result.err())
                     }
                 }
