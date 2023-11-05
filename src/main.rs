@@ -157,7 +157,7 @@ fn main() {
                             }
                         }
                     } else {
-                        // println!(" global {:}.{:}: {:?}", section, element, msg.payload_str())
+                         println!(" global {:}.{:}: {:?}", section, element, msg.payload_str())
                     }
                 }
 
