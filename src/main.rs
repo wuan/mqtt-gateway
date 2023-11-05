@@ -134,7 +134,7 @@ fn main() {
                                 );
                             }
                             "device" => {
-                                println!("  device: {:}: {:?}", field, msg.payload_str())
+                                // println!("  device: {:}: {:?}", field, msg.payload_str())
                             }
                             "status" => {
                                 if field == "last_update" {
@@ -142,7 +142,7 @@ fn main() {
                                     timestamp = timestamp_string.parse().map(move |value| Seconds(value)).ok();
                                     println!("{:?}", timestamp);
                                 } else {
-                                    println!("  status: {:}: {:?}", field, msg.payload_str());
+                                    // println!("  status: {:}: {:?}", field, msg.payload_str());
                                 }
                             }
                             _ => {
@@ -157,7 +157,7 @@ fn main() {
                             }
                         }
                     } else {
-                        println!(" global {:}.{:}: {:?}", section, element, msg.payload_str())
+                        // println!(" global {:}.{:}: {:?}", section, element, msg.payload_str())
                     }
                 }
 
