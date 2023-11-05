@@ -41,11 +41,13 @@ mod data;
 use futures::{executor::block_on, stream::StreamExt};
 use paho_mqtt as mqtt;
 use std::{env, process, time::Duration};
-use crate::data::LogEvent;
+use influxdb::{Client, Timestamp, WriteQuery};
+use influxdb::Timestamp::Seconds;
+use paho_mqtt::QOS_1;
 
 // The topics to which we subscribe.
-const TOPICS: &[&str] = &["klimalogger", "hello"];
-const QOS: &[i32] = &[1, 1];
+const TOPICS: &[&str] = &["solar/#"];
+const QOS: &[i32] = &[QOS_1];
 
 /////////////////////////////////////////////////////////////////////////////
 
@@ -63,7 +65,7 @@ fn main() {
     // A real system should try harder to use a unique ID.
     let create_opts = mqtt::CreateOptionsBuilder::new_v3()
         .server_uri(host)
-        .client_id("rust_async_subscribe")
+        .client_id("solar_test")
         .finalize();
 
     // Create the client connection
@@ -71,6 +73,8 @@ fn main() {
         println!("Error creating the client: {:?}", e);
         process::exit(1);
     });
+
+    let client = Client::new("http://influx:8086", "solar");
 
     if let Err(err) = block_on(async {
         // Get message stream before connecting.
@@ -104,12 +108,67 @@ fn main() {
         // whatever) the server will get an unexpected drop and then
         // should emit the LWT message.
 
+
+        let mut timestamp: Option<Timestamp> = None;
+        let mut point: Option<WriteQuery>;
+
         while let Some(msg_opt) = strm.next().await {
+            point = None;
+
             if let Some(msg) = msg_opt {
-                let result: serde_json::Result<LogEvent> = serde_json::from_slice(msg.payload());
-                println!("{:?}", result.unwrap());
-            }
-            else {
+                let mut split = msg.topic().split("/");
+                let _ = split.next();
+                let section = split.next();
+                let element = split.next();
+                if let (Some(section), Some(element)) = (section, element) {
+                    let field = split.next();
+                    if let Some(field) = field {
+                        match element {
+                            "0" => {
+                                println!("  inverter: {:}: {:?}", field, msg.payload_str());
+                                let value: f64 = msg.payload_str().parse().unwrap();
+                                point = Some(WriteQuery::new(timestamp.unwrap(), field)
+                                    .add_tag("device", section)
+                                    .add_tag("component", "inverter")
+                                    .add_field("value", value)
+                                );
+                            }
+                            "device" => {
+                                println!("  device: {:}: {:?}", field, msg.payload_str())
+                            }
+                            "status" => {
+                                if field == "last_update" {
+                                    let timestamp_string = msg.payload_str().to_string();
+                                    timestamp = timestamp_string.parse().map(move |value| Seconds(value)).ok();
+                                    println!("{:?}", timestamp);
+                                } else {
+                                    println!("  status: {:}: {:?}", field, msg.payload_str());
+                                }
+                            }
+                            _ => {
+                                println!("  string {:}: {:}: {:?}", element, field, msg.payload_str());
+                                let value: f64 = msg.payload_str().parse().unwrap();
+                                point = Some(WriteQuery::new(timestamp.unwrap(), field)
+                                    .add_tag("device", section)
+                                    .add_tag("component", "string")
+                                    .add_tag("string", element)
+                                    .add_field("value", value)
+                                );
+                            }
+                        }
+                    } else {
+                        println!(" global {:}.{:}: {:?}", section, element, msg.payload_str())
+                    }
+                }
+
+                if let Some(point) = point {
+                    println!("   -> {:?}", &point);
+                    let result = client.query(point).await;
+                }
+
+                // let result: serde_json::Result<LogEvent> = serde_json::from_slice(msg.payload());
+                // println!("{:?}", result.unwrap());
+            } else {
                 // A "None" means we were disconnected. Try to reconnect...
                 println!("Lost connection. Attempting reconnect.");
                 while let Err(err) = cli.reconnect().await {
