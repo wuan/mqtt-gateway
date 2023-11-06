@@ -133,14 +133,17 @@ fn main() {
                                 }
                             }
                             _ => {
-                                println!("  string {:}: {:}: {:?}", element, field, msg.payload_str());
-                                let value: f64 = msg.payload_str().parse().unwrap();
-                                point = Some(WriteQuery::new(timestamp.unwrap(), field)
-                                    .add_tag("device", section)
-                                    .add_tag("component", "string")
-                                    .add_tag("string", element)
-                                    .add_field("value", value)
-                                );
+                                let payload = msg.payload_str();
+                                println!("  string {:}: {:}: {:?}", element, field, payload);
+                                if payload.len() > 0 {
+                                    let value: f64 = payload.parse().unwrap();
+                                    point = Some(WriteQuery::new(timestamp.unwrap(), field)
+                                        .add_tag("device", section)
+                                        .add_tag("component", "string")
+                                        .add_tag("string", element)
+                                        .add_field("value", value)
+                                    );
+                                }
                             }
                         }
                     } else {
