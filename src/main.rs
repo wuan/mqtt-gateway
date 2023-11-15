@@ -38,12 +38,17 @@
 
 mod data;
 
+
 use futures::{executor::block_on, stream::StreamExt};
 use paho_mqtt as mqtt;
 use std::{env, process, time::Duration};
-use influxdb::{Client, Timestamp, WriteQuery};
+use std::ops::Deref;
+use influxdb::{Client, WriteQuery};
 use influxdb::Timestamp::Seconds;
 use paho_mqtt::QOS_1;
+
+use data::parse::parse_timestamp;
+use crate::data::parse::Timestamp;
 
 // The topics to which we subscribe.
 const TOPICS: &[&str] = &["solar/#"];
@@ -112,7 +117,7 @@ fn main() {
                             "0" => {
                                 println!("  inverter: {:}: {:?}", field, msg.payload_str());
                                 let value: f64 = msg.payload_str().parse().unwrap();
-                                point = Some(WriteQuery::new(timestamp.unwrap(), field)
+                                point = Some(WriteQuery::new(timestamp.as_ref().unwrap().to_influxdb(), field)
                                     .add_tag("device", section)
                                     .add_tag("component", "inverter")
                                     .add_field("value", value)
@@ -124,8 +129,7 @@ fn main() {
                             }
                             "status" => {
                                 if field == "last_update" {
-                                    let timestamp_string = msg.payload_str().to_string();
-                                    timestamp = timestamp_string.parse().map(move |value| Seconds(value)).ok();
+                                    timestamp = parse_timestamp(msg.payload_str().deref()).ok();
                                     //println!("{:?}", timestamp);
                                 } else {
                                     // ignore other status data
@@ -137,10 +141,13 @@ fn main() {
                                 println!("  string {:}: {:}: {:?}", element, field, payload);
                                 if payload.len() > 0 {
                                     let value: f64 = payload.parse().unwrap();
-                                    point = Some(WriteQuery::new(timestamp.unwrap(), field)
+                                    point = Some(WriteQuery::new(timestamp.as_ref().unwrap().to_influxdb(), field)
                                         .add_tag("device", section)
                                         .add_tag("component", "string")
                                         .add_tag("string", element)
+                                        .add_tag("year", timestamp.as_ref().unwrap().year)
+                                        .add_tag("month", timestamp.as_ref().unwrap().month)
+                                        .add_tag("year_month", timestamp.as_ref().unwrap().month_string.clone())
                                         .add_field("value", value)
                                     );
                                 }
