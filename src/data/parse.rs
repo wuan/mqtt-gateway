@@ -39,16 +39,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_timestamp() {
+    fn test_parse_timestamp() -> Result<(), &'static str> {
         let datetime = Utc.with_ymd_and_hms(2023, 2, 15, 20, 15, 32).unwrap();
         let epoch_seconds = datetime.timestamp();
         let epoch_seconds_string = epoch_seconds.to_string();
 
-        let result = parse_timestamp(&epoch_seconds_string).ok().unwrap();
+        let result = parse_timestamp(&epoch_seconds_string)?;
 
         assert_eq!(result.epoch_seconds, 1676492132);
         assert_eq!(result.year, 2023);
         assert_eq!(result.month, 2);
         assert_eq!(result.month_string, "2023-02");
+        Ok(())
     }
 }

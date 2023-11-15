@@ -36,19 +36,20 @@
  *    Frank Pagliughi - initial implementation and documentation
  *******************************************************************************/
 
-mod data;
-
-
-use futures::{executor::block_on, stream::StreamExt};
-use paho_mqtt as mqtt;
 use std::{env, process, time::Duration};
 use std::ops::Deref;
+
+use futures::{executor::block_on, stream::StreamExt};
 use influxdb::{Client, WriteQuery};
-use influxdb::Timestamp::Seconds;
+use paho_mqtt as mqtt;
 use paho_mqtt::QOS_1;
 
 use data::parse::parse_timestamp;
+
 use crate::data::parse::Timestamp;
+
+mod data;
+
 
 // The topics to which we subscribe.
 const TOPICS: &[&str] = &["solar/#"];
