@@ -16,7 +16,22 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
     - name: Build
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+    - name: Update Sonar
+      uses: sonarsource/sonarqube-scan-action@master
+      if: github.ref == 'refs/heads/main'
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+  # If you wish to fail your job when the Quality Gate is red, uncomment the
+  # following lines. This would typically be used to fail a deployment.
+  # - uses: sonarsource/sonarqube-quality-gate-action@master
+  #   timeout-minutes: 5
+  #   env:
+  #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
