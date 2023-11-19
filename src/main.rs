@@ -157,11 +157,12 @@ fn main() {
                     }
                 }
 
-                if let Some(point) = point {
-                    if (timestamp) {
-                        point.add_tag("year", timestamp.as_ref().unwrap().year)
-                            .add_tag("month", timestamp.as_ref().unwrap().month)
-                            .add_tag("year_month", timestamp.as_ref().unwrap().month_string.clone())
+                if let Some(mut point) = point {
+
+                    if let Some(timestamp) = &timestamp {
+                        point = point.add_tag("year", timestamp.year)
+                            .add_tag("month", timestamp.month)
+                            .add_tag("year_month", timestamp.month_string.clone());
                     }
                     println!("   -> {:?}", &point);
                     let result = client.query(point).await;
