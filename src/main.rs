@@ -122,9 +122,6 @@ fn main() {
                                     .add_tag("device", section)
                                     .add_tag("component", "inverter")
                                     .add_field("value", value)
-                                    .add_tag("year", timestamp.as_ref().unwrap().year)
-                                    .add_tag("month", timestamp.as_ref().unwrap().month)
-                                    .add_tag("year_month", timestamp.as_ref().unwrap().month_string.clone())
                                 );
                             }
                             "device" => {
@@ -149,9 +146,6 @@ fn main() {
                                         .add_tag("device", section)
                                         .add_tag("component", "string")
                                         .add_tag("string", element)
-                                        .add_tag("year", timestamp.as_ref().unwrap().year)
-                                        .add_tag("month", timestamp.as_ref().unwrap().month)
-                                        .add_tag("year_month", timestamp.as_ref().unwrap().month_string.clone())
                                         .add_field("value", value)
                                     );
                                 }
@@ -164,6 +158,11 @@ fn main() {
                 }
 
                 if let Some(point) = point {
+                    if (timestamp) {
+                        point.add_tag("year", timestamp.as_ref().unwrap().year)
+                            .add_tag("month", timestamp.as_ref().unwrap().month)
+                            .add_tag("year_month", timestamp.as_ref().unwrap().month_string.clone())
+                    }
                     println!("   -> {:?}", &point);
                     let result = client.query(point).await;
                     if result.is_err() {
