@@ -3,7 +3,7 @@ use influxdb::Timestamp::Seconds;
 
 pub struct Timestamp {
     pub epoch_seconds: i64,
-    pub year: i32,
+    pub year: u32,
     pub month: u32,
     pub month_string: String,
 }
@@ -20,7 +20,7 @@ pub fn parse_timestamp(timestamp_string: &str) -> Result<Timestamp, &'static str
 
     let naive_date_time = NaiveDateTime::from_timestamp_opt(epoch_seconds, 0).unwrap();
     println!("naive date time: {}", &naive_date_time);
-    let year = naive_date_time.year();
+    let year = naive_date_time.year() as u32;
     let month = naive_date_time.month();
     let month_string = format!("{:0>4}-{:0>2}", year, month);
     return Ok(Timestamp {
