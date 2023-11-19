@@ -122,6 +122,9 @@ fn main() {
                                     .add_tag("device", section)
                                     .add_tag("component", "inverter")
                                     .add_field("value", value)
+                                    .add_tag("year", timestamp.as_ref().unwrap().year)
+                                    .add_tag("month", timestamp.as_ref().unwrap().month)
+                                    .add_tag("year_month", timestamp.as_ref().unwrap().month_string.clone())
                                 );
                             }
                             "device" => {
