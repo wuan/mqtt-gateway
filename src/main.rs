@@ -42,6 +42,7 @@ use std::ops::Deref;
 use futures::{executor::block_on, stream::StreamExt};
 use paho_mqtt as mqtt;
 use paho_mqtt::QOS_1;
+use data::klimalogger;
 
 mod data;
 
@@ -98,7 +99,10 @@ fn main() {
         while let Some(msg_opt) = strm.next().await {
 
             if let Some(msg) = msg_opt {
-                println!("{}: {}", msg.topic(), msg.payload_str())
+                let result = klimalogger::parse(&msg)?;
+                if let Some(data) = result {
+                    println!("{:?}", data)
+                }
             } else {
                 // A "None" means we were disconnected. Try to reconnect...
                 println!("Lost connection. Attempting reconnect. {:?}", cli.is_connected());
