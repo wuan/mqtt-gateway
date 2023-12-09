@@ -1,6 +1,7 @@
 pub(crate) mod parse;
 mod opendtu;
 pub(crate) mod klimalogger;
+pub(crate) mod shelly;
 
 use serde::{Deserialize, Serialize};
 

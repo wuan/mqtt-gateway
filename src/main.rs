@@ -40,16 +40,20 @@ use std::{env, process, time::Duration};
 use std::ops::Deref;
 
 use futures::{executor::block_on, stream::StreamExt};
+use influxdb::{Client, Query, Timestamp, WriteQuery};
 use paho_mqtt as mqtt;
 use paho_mqtt::QOS_1;
-use data::klimalogger;
+use serde::{Deserialize, Serialize};
+
+use data::shelly;
 
 mod data;
 
 
 // The topics to which we subscribe.
-const TOPICS: &[&str] = &["klimalogger/#"];
+const TOPICS: &[&str] = &["shellies/#"];
 const QOS: &[i32] = &[QOS_1];
+
 
 fn main() {
     // Initialize the logger from the environment
@@ -63,7 +67,7 @@ fn main() {
 
     let create_opts = mqtt::CreateOptionsBuilder::new_v3()
         .server_uri(host)
-        .client_id("klima_gateway")
+        .client_id("shellies_gateway")
         .finalize();
 
     // Create the client connection
@@ -71,6 +75,8 @@ fn main() {
         println!("Error creating the client: {:?}", e);
         process::exit(1);
     });
+
+    let influx_client = Client::new("http://influx:8086", "iot");
 
     if let Err(err) = block_on(async {
         // Get message stream before connecting.
@@ -95,14 +101,55 @@ fn main() {
         // whatever) the server will get an unexpected drop and then
         // should emit the LWT message.
 
+        enum WriteType {
+            Int(i32),
+            Float(f32),
+        }
 
         while let Some(msg_opt) = strm.next().await {
-
             if let Some(msg) = msg_opt {
-                let result = klimalogger::parse(&msg)?;
-                if let Some(data) = result {
-                    println!("{:?}", data)
+                if msg.topic().ends_with("/status/switch:0") {
+                    let location = msg.topic().split("/").nth(1).unwrap();
+
+                    let result = shelly::parse(&msg)?;
+
+                    if let Some(data) = result {
+                        println!("{} {:?}", location, data);
+
+
+                        let timestamp = Timestamp::Seconds(data.aenergy.minute_ts as u128);
+                        for (measurement, value, unit) in vec![
+                            ("output", WriteType::Int(data.output as i32), "bool"),
+                            ("power", WriteType::Float(data.apower), "W"),
+                            ("current", WriteType::Float( data.current ), "A"),
+                            ("voltage", WriteType::Float( data.voltage ), "V"),
+                            ("total_energy", WriteType::Float( data.aenergy.total ), "Wh"),
+                            ("temperature", WriteType::Float( data.temperature.tC ), "°C"),
+                        ] {
+                            let query = WriteQuery::new(timestamp, measurement);
+                            let query = unsafe {
+                                match value {
+                                    WriteType::Int(i) => {
+                                        query.add_field("value", i)
+                                    }
+                                    WriteType::Float(f) => {
+                                        query.add_field("value", f)
+                                    }
+                                }
+                            };
+
+                            let query = query.add_tag("location", location)
+                                .add_tag("sensor", "shelly")
+                                .add_tag("type", "switch")
+                                .add_tag("unit", unit);
+                            influx_client.query(&query).await.expect("failed to write to influx");
+                        }
+                    }
                 }
+                //let result = klimalogger::parse(&msg)?;
+                // if let Some(data) = result {
+                //     println!("{:?}", data)
+                // }
             } else {
                 // A "None" means we were disconnected. Try to reconnect...
                 println!("Lost connection. Attempting reconnect. {:?}", cli.is_connected());
@@ -120,3 +167,4 @@ fn main() {
         eprintln!("{}", err);
     }
 }
+
