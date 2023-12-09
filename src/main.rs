@@ -145,6 +145,8 @@ fn main() {
                             influx_client.query(&query).await.expect("failed to write to influx");
                         }
                     }
+                } else {
+                    println!("{} {:?}", msg.topic(), msg.payload_str());
                 }
                 //let result = klimalogger::parse(&msg)?;
                 // if let Some(data) = result {
