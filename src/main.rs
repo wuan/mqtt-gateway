@@ -36,10 +36,12 @@
  *    Frank Pagliughi - initial implementation and documentation
  *******************************************************************************/
 
-use std::{env, process, time::Duration};
+use std::{env, process, thread, time::Duration};
 use std::ops::Deref;
+use std::sync::mpsc::sync_channel;
+use async_std::prelude::FutureExt;
 
-use futures::{executor::block_on, stream::StreamExt};
+use futures::{executor::block_on, SinkExt, stream::StreamExt};
 use influxdb::{Client, Query, Timestamp, WriteQuery};
 use paho_mqtt as mqtt;
 use paho_mqtt::QOS_1;
@@ -76,7 +78,30 @@ fn main() {
         process::exit(1);
     });
 
-    let influx_client = Client::new("http://influx:8086", "iot");
+    let (mut tx, mut rx) = sync_channel(100);
+
+    let influx_writer_handle = thread::spawn(move || {
+        println!("starting influx writer");
+        let influx_client = Client::new("http://influx:8086", "iot");
+        block_on(async move {
+            println!("starting influx writer async");
+
+            loop {
+                let result = rx.recv();
+                let query = match result {
+                    Ok(query) => { query }
+                    Err(error) => {
+                        println!("error receiving query: {:?}", error);
+                        break;
+                    }
+                };
+                let string = influx_client.query(query).await.expect("failed to write to influx");
+            }
+            println!("exiting influx writer async");
+        });
+
+        println!("exiting influx writer");
+    });
 
     if let Err(err) = block_on(async {
         // Get message stream before connecting.
@@ -116,15 +141,14 @@ fn main() {
                     if let Some(data) = result {
                         println!("{} {:?}", location, data);
 
-
                         let timestamp = Timestamp::Seconds(data.aenergy.minute_ts as u128);
                         for (measurement, value, unit) in vec![
                             ("output", WriteType::Int(data.output as i32), "bool"),
                             ("power", WriteType::Float(data.apower), "W"),
-                            ("current", WriteType::Float( data.current ), "A"),
-                            ("voltage", WriteType::Float( data.voltage ), "V"),
-                            ("total_energy", WriteType::Float( data.aenergy.total ), "Wh"),
-                            ("temperature", WriteType::Float( data.temperature.tC ), "°C"),
+                            ("current", WriteType::Float(data.current), "A"),
+                            ("voltage", WriteType::Float(data.voltage), "V"),
+                            ("total_energy", WriteType::Float(data.aenergy.total), "Wh"),
+                            ("temperature", WriteType::Float(data.temperature.tC), "°C"),
                         ] {
                             let query = WriteQuery::new(timestamp, measurement);
                             let query = unsafe {
@@ -142,7 +166,7 @@ fn main() {
                                 .add_tag("sensor", "shelly")
                                 .add_tag("type", "switch")
                                 .add_tag("unit", unit);
-                            influx_client.query(&query).await.expect("failed to write to influx");
+                            tx.send(query).expect("failed to send");
                         }
                     }
                 } else {
@@ -162,6 +186,9 @@ fn main() {
                 }
             }
         }
+
+        drop(tx);
+        influx_writer_handle.join().expect("failed to join influx writer thread");
 
         // Explicit return type for the async block
         Ok::<(), mqtt::Error>(())
