@@ -4,10 +4,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Data {
     pub(crate) output: bool,
-    pub(crate) apower: f32,
+    #[serde(rename = "apower")]
+    pub(crate) power: f32,
     pub(crate) voltage: f32,
     pub(crate) current: f32,
-    pub(crate) aenergy: EnergyData,
+    #[serde(rename = "aenergy")]
+    pub(crate) energy: EnergyData,
     pub(crate) temperature: TemperatureData,
 }
 
@@ -19,7 +21,8 @@ pub struct EnergyData {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TemperatureData {
-    pub(crate) tC: f32,
+    #[serde(rename = "tC")]
+    pub(crate) t_C: f32,
 }
 
 pub fn parse(msg: &Message) -> Result<Option<Data>, &'static str> {

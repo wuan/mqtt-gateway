@@ -141,14 +141,14 @@ fn main() {
                     if let Some(data) = result {
                         println!("{} {:?}", location, data);
 
-                        let timestamp = Timestamp::Seconds(data.aenergy.minute_ts as u128);
+                        let timestamp = Timestamp::Seconds(data.energy.minute_ts as u128);
                         for (measurement, value, unit) in vec![
                             ("output", WriteType::Int(data.output as i32), "bool"),
-                            ("power", WriteType::Float(data.apower), "W"),
+                            ("power", WriteType::Float(data.power), "W"),
                             ("current", WriteType::Float(data.current), "A"),
                             ("voltage", WriteType::Float(data.voltage), "V"),
-                            ("total_energy", WriteType::Float(data.aenergy.total), "Wh"),
-                            ("temperature", WriteType::Float(data.temperature.tC), "°C"),
+                            ("total_energy", WriteType::Float(data.energy.total), "Wh"),
+                            ("temperature", WriteType::Float(data.temperature.t_C), "°C"),
                         ] {
                             let query = WriteQuery::new(timestamp, measurement);
                             let query = unsafe {
