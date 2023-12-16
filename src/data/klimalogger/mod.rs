@@ -5,15 +5,11 @@ use time::OffsetDateTime;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Data {
     #[serde(rename = "time")]
-    #[serde(with = "time::serde::rfc3339")]
-    timestamp: OffsetDateTime,
-    host: String,
-    location: String,
-    #[serde(rename = "type")]
-    measurement_type: String,
-    unit: String,
-    sensor: String,
-    calculated: bool,
+    pub(crate) timestamp: i32,
+    pub(crate) value: f32,
+    pub(crate) unit: String,
+    pub(crate) sensor: String,
+    pub(crate) calculated: bool,
 }
 
 pub fn parse(msg: &Message) -> Result<Option<Data>, &'static str> {
