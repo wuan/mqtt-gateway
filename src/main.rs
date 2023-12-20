@@ -41,10 +41,12 @@ use std::ops::Deref;
 use std::sync::mpsc::{Receiver, sync_channel};
 
 use async_std::prelude::FutureExt;
+use chrono::{DateTime, Utc};
 use futures::{executor::block_on, SinkExt, stream::StreamExt};
 use influxdb::{Client, Query, Timestamp, WriteQuery};
 use paho_mqtt as mqtt;
 use paho_mqtt::QOS_1;
+use postgres::{Config, NoTls};
 use serde::{Deserialize, Serialize};
 
 use data::shelly;
@@ -58,10 +60,38 @@ mod data;
 const TOPICS: &[&str] = &["sensors/#", "shellies/#"];
 const QOS: &[i32] = &[QOS_1, QOS_1];
 
+#[derive(Debug)]
+struct SensorReading {
+    measurement: String,
+    time: DateTime<Utc>,
+    location: String,
+    sensor: String,
+    value: f32,
+    unit: String,
+    calculated: bool,
+}
 
 fn main() {
     // Initialize the logger from the environment
     env_logger::init();
+
+    let u = match env::var_os("USER") {
+        Some(v) => v.into_string().unwrap(),
+        None => panic!("$USER is not set")
+    };
+
+    let host = env::var_os("PG_HOST").unwrap().into_string().unwrap();
+    let port = env::var_os("PG_PORT").unwrap().into_string().unwrap();
+    let user = env::var_os("PG_USER").unwrap().into_string().unwrap();
+    let password = env::var_os("PG_PASSWORD").unwrap().into_string().unwrap();
+    let database = env::var_os("PG_DATABASE").unwrap().into_string().unwrap();
+    let mut db_config = postgres::Config::new();
+    let _ = db_config
+        .host(&host)
+        .port(port.parse::<u16>().unwrap())
+        .user(&user)
+        .password(password)
+        .dbname(&database);
 
     let host = env::args()
         .nth(1)
@@ -80,7 +110,7 @@ fn main() {
         process::exit(1);
     });
 
-    let (mut iot_tx, mut iot_rx) = sync_channel(100);
+    let (mut iot_tx, iot_rx) = sync_channel(100);
 
     let iot_influx_writer_handle = thread::spawn(move || {
         println!("starting influx writer");
@@ -89,13 +119,20 @@ fn main() {
         start_influx_writer(iot_rx, database);
     });
 
-    let (mut sensors_tx, mut sensors_rx) = sync_channel(100);
+    let (sensors_tx, sensors_rx) = sync_channel(100);
 
     let sensors_influx_writer_handle = thread::spawn(move || {
         println!("starting influx writer");
         let database = "klima";
 
         start_influx_writer(sensors_rx, database);
+    });
+
+    let (ts_sensors_tx, ts_sensors_rx) = sync_channel(100);
+
+    let sensors_postgres_writer_handle = thread::spawn(move || {
+        println!("starting postgres writer");
+        start_postgres_writer(ts_sensors_rx, &db_config);
     });
 
     if let Err(err) = block_on(async {
@@ -146,14 +183,12 @@ fn main() {
                             ("temperature", WriteType::Float(data.temperature.t_C), "°C"),
                         ] {
                             let query = WriteQuery::new(timestamp, measurement);
-                            let query = unsafe {
-                                match value {
-                                    WriteType::Int(i) => {
-                                        query.add_field("value", i)
-                                    }
-                                    WriteType::Float(f) => {
-                                        query.add_field("value", f)
-                                    }
+                            let query = match value {
+                                WriteType::Int(i) => {
+                                    query.add_field("value", i)
+                                }
+                                WriteType::Float(f) => {
+                                    query.add_field("value", f)
                                 }
                             };
 
@@ -175,17 +210,32 @@ fn main() {
                         println!("{} {} {:?}", location, measurement, &result);
                         let timestamp = Timestamp::Seconds(result.timestamp as u128);
                         let write_query = WriteQuery::new(timestamp, "data")
-                            .add_tag("type", measurement)
-                            .add_tag("location", location)
-                            .add_tag("sensor", result.sensor)
+                            .add_tag("type", measurement.to_string())
+                            .add_tag("location", location.to_string())
+                            .add_tag("sensor", result.sensor.to_string())
                             .add_tag("calculated", result.calculated)
                             .add_field("value", result.value);
                         let write_query = if result.unit != "" {
-                            write_query.add_tag("unit", result.unit)
+                            write_query.add_tag("unit", result.unit.to_string())
                         } else {
                             write_query
                         };
                         sensors_tx.send(write_query).expect("failed to send");
+
+                        let naive_date_time = chrono::NaiveDateTime::from_timestamp_opt(result.timestamp as i64, 0).expect("failed to convert timestamp");
+
+                        let date_time = DateTime::<Utc>::from_utc(naive_date_time, Utc);
+
+                        let sensor_reading = SensorReading {
+                            measurement: measurement.to_string(),
+                            time: date_time,
+                            location: location.to_string(),
+                            sensor: result.sensor.to_string(),
+                            value: result.value,
+                            unit: result.unit.to_string(),
+                            calculated: result.calculated,
+                        };
+                        ts_sensors_tx.send(sensor_reading).expect("failed to send");
                     }
                 } else {
                     println!("{} {:?}", msg.topic(), msg.payload_str());
@@ -203,6 +253,8 @@ fn main() {
 
         drop(iot_tx);
         iot_influx_writer_handle.join().expect("failed to join influx writer thread");
+        sensors_influx_writer_handle.join().expect("failed to join influx writer thread");
+        sensors_postgres_writer_handle.join().expect("failed to join influx writer thread");
 
         // Explicit return type for the async block
         Ok::<(), mqtt::Error>(())
@@ -211,7 +263,7 @@ fn main() {
     }
 }
 
-fn start_influx_writer(mut iot_rx: Receiver<WriteQuery>, database: &str) {
+fn start_influx_writer(iot_rx: Receiver<WriteQuery>, database: &str) {
     let influx_client = Client::new("http://influx:8086", database);
     block_on(async move {
         println!("starting influx writer async");
@@ -227,6 +279,41 @@ fn start_influx_writer(mut iot_rx: Receiver<WriteQuery>, database: &str) {
             };
             println!("writing to influx: {:?}", query);
             let _ = influx_client.query(query).await.expect("failed to write to influx");
+        }
+        println!("exiting influx writer async");
+    });
+
+    println!("exiting influx writer");
+}
+
+fn start_postgres_writer(rx: Receiver<SensorReading>, config: &Config) {
+    let mut client = config.connect(NoTls).expect("failed to connect to postgres");
+
+    block_on(async move {
+        println!("starting postgres writer async");
+
+        loop {
+            let result = rx.recv();
+            let query = match result {
+                Ok(query) => { query }
+                Err(error) => {
+                    println!("error receiving query: {:?}", error);
+                    break;
+                }
+            };
+
+            let statement = format!("insert into \"{}\" (time, location, sensor, value, unit, calculated) values ($1, $2, $3, $4, $5, $6);", query.measurement);
+            let x = client.execute(
+                &statement,
+                &[&query.time, &query.location, &query.sensor, &query.value, &query.unit, &query.calculated],
+            );
+
+            match x {
+                Ok(_) => {}
+                Err(error) => {
+                    eprintln!("#### Error writing to postgres: {} {:?}", query.measurement, error);
+                }
+            }
         }
         println!("exiting influx writer async");
     });
