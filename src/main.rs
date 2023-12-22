@@ -277,7 +277,6 @@ fn start_influx_writer(iot_rx: Receiver<WriteQuery>, database: &str) {
                     break;
                 }
             };
-            println!("writing to influx: {:?}", query);
             let _ = influx_client.query(query).await.expect("failed to write to influx");
         }
         println!("exiting influx writer async");
