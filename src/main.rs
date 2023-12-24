@@ -165,7 +165,7 @@ fn main() {
 
         while let Some(msg_opt) = strm.next().await {
             if let Some(msg) = msg_opt {
-                if msg.topic().ends_with("/status/switch:0") {
+                if msg.topic().ends_with("/status/switch:0") || msg.topic().ends_with("/status/cover:0")  {
                     let location = msg.topic().split("/").nth(1).unwrap();
 
                     let result = shelly::parse(&msg)?;
