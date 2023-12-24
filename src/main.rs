@@ -174,30 +174,34 @@ fn main() {
                     if let Some(data) = result {
                         println!("{} {:?}", location, data);
 
-                        let timestamp = Timestamp::Seconds(data.energy.minute_ts as u128);
-                        for (measurement, value, unit) in vec![
-                            ("output", WriteType::Int(data.output as i32), "bool"),
-                            ("power", WriteType::Float(data.power), "W"),
-                            ("current", WriteType::Float(data.current), "A"),
-                            ("voltage", WriteType::Float(data.voltage), "V"),
-                            ("total_energy", WriteType::Float(data.energy.total), "Wh"),
-                            ("temperature", WriteType::Float(data.temperature.t_celsius), "°C"),
-                        ] {
-                            let query = WriteQuery::new(timestamp, measurement);
-                            let query = match value {
-                                WriteType::Int(i) => {
-                                    query.add_field("value", i)
-                                }
-                                WriteType::Float(f) => {
-                                    query.add_field("value", f)
-                                }
-                            };
+                        if let Some(minute_ts) = data.energy.minute_ts {
+                            let timestamp = Timestamp::Seconds(minute_ts as u128);
+                            for (measurement, value, unit) in vec![
+                                ("output", WriteType::Int(data.output as i32), "bool"),
+                                ("power", WriteType::Float(data.power), "W"),
+                                ("current", WriteType::Float(data.current), "A"),
+                                ("voltage", WriteType::Float(data.voltage), "V"),
+                                ("total_energy", WriteType::Float(data.energy.total), "Wh"),
+                                ("temperature", WriteType::Float(data.temperature.t_celsius), "°C"),
+                            ] {
+                                let query = WriteQuery::new(timestamp, measurement);
+                                let query = match value {
+                                    WriteType::Int(i) => {
+                                        query.add_field("value", i)
+                                    }
+                                    WriteType::Float(f) => {
+                                        query.add_field("value", f)
+                                    }
+                                };
 
-                            let query = query.add_tag("location", location)
-                                .add_tag("sensor", "shelly")
-                                .add_tag("type", "switch")
-                                .add_tag("unit", unit);
-                            iot_tx.send(query).expect("failed to send");
+                                let query = query.add_tag("location", location)
+                                    .add_tag("sensor", "shelly")
+                                    .add_tag("type", "switch")
+                                    .add_tag("unit", unit);
+                                iot_tx.send(query).expect("failed to send");
+                            }
+                        } else {
+                            println!("{} no timestamp {:?}", msg.topic(), msg.payload_str());
                         }
                     }
                 } else if msg.topic().ends_with("/status/cover:0") {
@@ -208,30 +212,34 @@ fn main() {
                     if let Some(data) = result {
                         println!("{} {:?}", location, data);
 
-                        let timestamp = Timestamp::Seconds(data.energy.minute_ts as u128);
-                        for (measurement, value, unit) in vec![
-                            ("position", WriteType::Int(data.position), "%"),
-                            ("power", WriteType::Float(data.power), "W"),
-                            ("current", WriteType::Float(data.current), "A"),
-                            ("voltage", WriteType::Float(data.voltage), "V"),
-                            ("total_energy", WriteType::Float(data.energy.total), "Wh"),
-                            ("temperature", WriteType::Float(data.temperature.t_celsius), "°C"),
-                        ] {
-                            let query = WriteQuery::new(timestamp, measurement);
-                            let query = match value {
-                                WriteType::Int(i) => {
-                                    query.add_field("value", i)
-                                }
-                                WriteType::Float(f) => {
-                                    query.add_field("value", f)
-                                }
-                            };
+                        if let Some(minute_ts) = data.energy.minute_ts {
+                            let timestamp = Timestamp::Seconds(minute_ts as u128);
+                            for (measurement, value, unit) in vec![
+                                ("position", WriteType::Int(data.position), "%"),
+                                ("power", WriteType::Float(data.power), "W"),
+                                ("current", WriteType::Float(data.current), "A"),
+                                ("voltage", WriteType::Float(data.voltage), "V"),
+                                ("total_energy", WriteType::Float(data.energy.total), "Wh"),
+                                ("temperature", WriteType::Float(data.temperature.t_celsius), "°C"),
+                            ] {
+                                let query = WriteQuery::new(timestamp, measurement);
+                                let query = match value {
+                                    WriteType::Int(i) => {
+                                        query.add_field("value", i)
+                                    }
+                                    WriteType::Float(f) => {
+                                        query.add_field("value", f)
+                                    }
+                                };
 
-                            let query = query.add_tag("location", location)
-                                .add_tag("sensor", "shelly")
-                                .add_tag("type", "switch")
-                                .add_tag("unit", unit);
-                            iot_tx.send(query).expect("failed to send");
+                                let query = query.add_tag("location", location)
+                                    .add_tag("sensor", "shelly")
+                                    .add_tag("type", "switch")
+                                    .add_tag("unit", unit);
+                                iot_tx.send(query).expect("failed to send");
+                            }
+                        } else {
+                            println!("{} no timestamp {:?}", msg.topic(), msg.payload_str());
                         }
                     }
                 } else if msg.topic().starts_with("sensors/") {

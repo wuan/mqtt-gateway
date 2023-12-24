@@ -30,7 +30,7 @@ pub struct CoverData {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct EnergyData {
     pub(crate) total: f32,
-    pub(crate) minute_ts: i64,
+    pub(crate) minute_ts: Option<i64>,
 }
 
 impl fmt::Debug for EnergyData {
@@ -92,6 +92,23 @@ mod tests {
         assert_eq!(result.current, 0.5);
         assert_eq!(result.energy.total, 3.143);
         assert_eq!(result.temperature.t_celsius, 30.7);
+        assert_eq!(result.energy.minute_ts.unwrap(), 1703414519);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_cover_status_without_timestamp() -> Result<(), &'static str> {
+        let message = Message::new("shellies/bedroom-curtain/status/cover:0", "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\"apower\":0.0,\"voltage\":231.7,\"current\":0.500,\"pf\":0.00,\"freq\":50.0,\"aenergy\":{\"total\":3.143,\"by_minute\":[0.000,0.000,97.712]},\"temperature\":{\"tC\":30.7, \"tF\":87.3},\"pos_control\":true,\"last_direction\":\"open\",\"current_pos\":100}", QOS_1);
+        let result: CoverData = parse(&message)?.unwrap();
+
+        assert_eq!(result.position, 100);
+        assert_eq!(result.power, 0.0);
+        assert_eq!(result.voltage, 231.7);
+        assert_eq!(result.current, 0.5);
+        assert_eq!(result.energy.total, 3.143);
+        assert_eq!(result.temperature.t_celsius, 30.7);
+        assert!(result.energy.minute_ts.is_none());
 
         Ok(())
     }
