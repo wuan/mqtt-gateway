@@ -35,7 +35,7 @@ mod tests {
         let message = Message::new(topic, payload, QOS_1);
         let data = parse(&message)?.unwrap();
 
-        assert_eq!(data.timestamp.unix_timestamp(), 1701292592);
+        assert_eq!(data.timestamp, 1701292592);
 
         Ok(())
     }
