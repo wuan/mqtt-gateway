@@ -30,12 +30,13 @@ mod tests {
     #[test]
     fn test_parse() -> Result<(), &'static str> {
         let topic = "klimalogger";
-        let payload = "{\"host\": \"dana\", \"location\": \"Kinderzimmer 1\", \"type\": \"temperature\", \"unit\": \"\u{00b0C}\", \"sensor\": \"BME680\", \"calculated\": false, \"time\": \"2023-11-29T21:16:32.511722+00:00\", \"value\": 19.45}";
+        let payload = "{\"location\": \"Kinderzimmer 1\", \"type\": \"temperature\", \"unit\": \"\u{00b0C}\", \"sensor\": \"BME680\", \"calculated\": false, \"time\": 1701292592, \"value\": 19.45}";
 
         let message = Message::new(topic, payload, QOS_1);
         let data = parse(&message)?.unwrap();
 
         assert_eq!(data.timestamp, 1701292592);
+        assert_eq!(data.sensor, "BME680");
 
         Ok(())
     }
