@@ -1,8 +1,10 @@
+use std::fmt;
 use paho_mqtt::Message;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use crate::data::shelly::EnergyData;
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Data {
     #[serde(rename = "time")]
     pub(crate) timestamp: i32,
@@ -10,6 +12,12 @@ pub struct Data {
     pub(crate) unit: String,
     pub(crate) sensor: String,
     pub(crate) calculated: bool,
+}
+
+impl fmt::Debug for Data {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} {} (@{}, {}{})", self.value, self.unit, self.timestamp, self.sensor, if self.calculated {", C" } else {""})
+    }
 }
 
 pub fn parse(msg: &Message) -> Result<Option<Data>, &'static str> {

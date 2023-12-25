@@ -197,7 +197,7 @@ fn main() {
                     let result = klimalogger::parse(&msg)?;
 
                     if let Some(result) = result {
-                        println!("{} {} {:?}", location, measurement, &result);
+                        println!("{} \"{}\": {:?}", location, measurement, &result);
                         let timestamp = Timestamp::Seconds(result.timestamp as u128);
                         let write_query = WriteQuery::new(timestamp, "data")
                             .add_tag("type", measurement.to_string())
@@ -257,7 +257,7 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(msg: &'a
     let location = msg.topic().split("/").nth(1).unwrap();
     let result: Option<T> = shelly::parse(&msg).unwrap();
     if let Some(data) = result {
-        println!("{} {:?}", location, data);
+        println!("{}: {:?}", location, data);
 
         if let Some(minute_ts) = data.timestamp() {
             let timestamp = Timestamp::Seconds(minute_ts as u128);
