@@ -2,6 +2,10 @@ use std::fmt;
 use paho_mqtt::Message;
 use serde::{Deserialize, Serialize};
 
+pub trait Timestamped {
+    fn timestamp(&self) -> Option<i64>;
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SwitchData {
     pub(crate) output: bool,
@@ -12,6 +16,12 @@ pub struct SwitchData {
     #[serde(rename = "aenergy")]
     pub(crate) energy: EnergyData,
     pub(crate) temperature: TemperatureData,
+}
+
+impl Timestamped for SwitchData {
+    fn timestamp(&self) -> Option<i64> {
+        self.energy.minute_ts
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -25,6 +35,12 @@ pub struct CoverData {
     #[serde(rename = "aenergy")]
     pub(crate) energy: EnergyData,
     pub(crate) temperature: TemperatureData,
+}
+
+impl Timestamped for CoverData {
+    fn timestamp(&self) -> Option<i64> {
+        self.energy.minute_ts
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]

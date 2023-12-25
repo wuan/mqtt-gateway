@@ -37,22 +37,23 @@
  *******************************************************************************/
 
 use std::{env, process, thread, time::Duration};
+use std::fmt::Debug;
 use std::ops::Deref;
-use std::sync::mpsc::{Receiver, sync_channel};
+use std::sync::mpsc::{Receiver, sync_channel, SyncSender};
 
 use async_std::prelude::FutureExt;
 use chrono::{DateTime, Utc};
 use futures::{executor::block_on, SinkExt, stream::StreamExt};
 use influxdb::{Client, Query, Timestamp, WriteQuery};
 use paho_mqtt as mqtt;
-use paho_mqtt::QOS_1;
+use paho_mqtt::{Message, QOS_1};
 use postgres::{Config, NoTls};
 use serde::{Deserialize, Serialize};
 
 use data::shelly;
 
 use crate::data::klimalogger;
-use crate::data::shelly::{CoverData, SwitchData};
+use crate::data::shelly::{CoverData, SwitchData, Timestamped};
 
 mod data;
 
@@ -70,6 +71,11 @@ struct SensorReading {
     value: f32,
     unit: String,
     calculated: bool,
+}
+
+pub enum WriteType {
+    Int(i32),
+    Float(f32),
 }
 
 fn main() {
@@ -159,89 +165,30 @@ fn main() {
         // whatever) the server will get an unexpected drop and then
         // should emit the LWT message.
 
-        enum WriteType {
-            Int(i32),
-            Float(f32),
-        }
+        let switch_fields: &[(&str, fn(data: &SwitchData) -> WriteType, &str)] = &[
+            ("output", |data: &SwitchData| WriteType::Int(data.output as i32), "bool"),
+            ("power", |data: &SwitchData| WriteType::Float(data.power), "W"),
+            ("current", |data: &SwitchData| WriteType::Float(data.current), "A"),
+            ("voltage", |data: &SwitchData| WriteType::Float(data.voltage), "V"),
+            ("total_energy", |data: &SwitchData| WriteType::Float(data.energy.total), "Wh"),
+            ("temperature", |data: &SwitchData| WriteType::Float(data.temperature.t_celsius), "°C"),
+        ];
+
+        let cover_fields: &[(&str, fn(data: &CoverData) -> WriteType, &str)] = &[
+            ("position", |data: &CoverData| WriteType::Int(data.position), "%"),
+            ("power", |data: &CoverData| WriteType::Float(data.power), "W"),
+            ("current", |data: &CoverData| WriteType::Float(data.current), "A"),
+            ("voltage", |data: &CoverData| WriteType::Float(data.voltage), "V"),
+            ("total_energy", |data: &CoverData| WriteType::Float(data.energy.total), "Wh"),
+            ("temperature", |data: &CoverData| WriteType::Float(data.temperature.t_celsius), "°C"),
+        ];
 
         while let Some(msg_opt) = strm.next().await {
             if let Some(msg) = msg_opt {
                 if msg.topic().ends_with("/status/switch:0") {
-                    let location = msg.topic().split("/").nth(1).unwrap();
-
-                    let result: Option<SwitchData> = shelly::parse(&msg)?;
-
-                    if let Some(data) = result {
-                        println!("{} {:?}", location, data);
-
-                        if let Some(minute_ts) = data.energy.minute_ts {
-                            let timestamp = Timestamp::Seconds(minute_ts as u128);
-                            for (measurement, value, unit) in vec![
-                                ("output", WriteType::Int(data.output as i32), "bool"),
-                                ("power", WriteType::Float(data.power), "W"),
-                                ("current", WriteType::Float(data.current), "A"),
-                                ("voltage", WriteType::Float(data.voltage), "V"),
-                                ("total_energy", WriteType::Float(data.energy.total), "Wh"),
-                                ("temperature", WriteType::Float(data.temperature.t_celsius), "°C"),
-                            ] {
-                                let query = WriteQuery::new(timestamp, measurement);
-                                let query = match value {
-                                    WriteType::Int(i) => {
-                                        query.add_field("value", i)
-                                    }
-                                    WriteType::Float(f) => {
-                                        query.add_field("value", f)
-                                    }
-                                };
-
-                                let query = query.add_tag("location", location)
-                                    .add_tag("sensor", "shelly")
-                                    .add_tag("type", "switch")
-                                    .add_tag("unit", unit);
-                                iot_tx.send(query).expect("failed to send");
-                            }
-                        } else {
-                            println!("{} no timestamp {:?}", msg.topic(), msg.payload_str());
-                        }
-                    }
+                    handle_message(&msg, &mut iot_tx, switch_fields);
                 } else if msg.topic().ends_with("/status/cover:0") {
-                    let location = msg.topic().split("/").nth(1).unwrap();
-
-                    let result: Option<CoverData> = shelly::parse(&msg)?;
-
-                    if let Some(data) = result {
-                        println!("{} {:?}", location, data);
-
-                        if let Some(minute_ts) = data.energy.minute_ts {
-                            let timestamp = Timestamp::Seconds(minute_ts as u128);
-                            for (measurement, value, unit) in vec![
-                                ("position", WriteType::Int(data.position), "%"),
-                                ("power", WriteType::Float(data.power), "W"),
-                                ("current", WriteType::Float(data.current), "A"),
-                                ("voltage", WriteType::Float(data.voltage), "V"),
-                                ("total_energy", WriteType::Float(data.energy.total), "Wh"),
-                                ("temperature", WriteType::Float(data.temperature.t_celsius), "°C"),
-                            ] {
-                                let query = WriteQuery::new(timestamp, measurement);
-                                let query = match value {
-                                    WriteType::Int(i) => {
-                                        query.add_field("value", i)
-                                    }
-                                    WriteType::Float(f) => {
-                                        query.add_field("value", f)
-                                    }
-                                };
-
-                                let query = query.add_tag("location", location)
-                                    .add_tag("sensor", "shelly")
-                                    .add_tag("type", "switch")
-                                    .add_tag("unit", unit);
-                                iot_tx.send(query).expect("failed to send");
-                            }
-                        } else {
-                            println!("{} no timestamp {:?}", msg.topic(), msg.payload_str());
-                        }
-                    }
+                    handle_message(&msg, &mut iot_tx, cover_fields);
                 } else if msg.topic().starts_with("sensors/") {
                     let mut split = msg.topic().split("/");
                     let location = split.nth(1).unwrap();
@@ -303,6 +250,38 @@ fn main() {
         Ok::<(), mqtt::Error>(())
     }) {
         eprintln!("{}", err);
+    }
+}
+
+fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(msg: &'a Message, iot_tx: &mut SyncSender<WriteQuery>, fields: &[(&str, fn(&T) -> WriteType, &str)]) {
+    let location = msg.topic().split("/").nth(1).unwrap();
+    let result: Option<T> = shelly::parse(&msg).unwrap();
+    if let Some(data) = result {
+        println!("{} {:?}", location, data);
+
+        if let Some(minute_ts) = data.timestamp() {
+            let timestamp = Timestamp::Seconds(minute_ts as u128);
+            for (measurement, value, unit) in fields {
+                let query = WriteQuery::new(timestamp, *measurement);
+                let result = value(&data);
+                let query = match result {
+                    WriteType::Int(i) => {
+                        query.add_field("value", i)
+                    }
+                    WriteType::Float(f) => {
+                        query.add_field("value", f)
+                    }
+                };
+
+                let query = query.add_tag("location", location)
+                    .add_tag("sensor", "shelly")
+                    .add_tag("type", "switch")
+                    .add_tag("unit", unit);
+                iot_tx.send(query).expect("failed to send");
+            }
+        } else {
+            println!("{} no timestamp {:?}", msg.topic(), msg.payload_str());
+        }
     }
 }
 
