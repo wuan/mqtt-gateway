@@ -37,23 +37,23 @@
  *******************************************************************************/
 
 use std::{env, process, thread, time::Duration};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Deref;
-use std::sync::mpsc::{Receiver, sync_channel, SyncSender};
+use std::sync::mpsc::{Receiver, sync_channel};
 
 use async_std::prelude::FutureExt;
 use chrono::{DateTime, Utc};
 use futures::{executor::block_on, SinkExt, stream::StreamExt};
-use influxdb::{Client, Query, Timestamp, WriteQuery};
+use influxdb::{Client, Query, WriteQuery};
 use paho_mqtt as mqtt;
-use paho_mqtt::{Message, QOS_1};
+use paho_mqtt::QOS_1;
 use postgres::{Config, NoTls};
 use serde::{Deserialize, Serialize};
 
-use data::shelly;
-
-use crate::data::klimalogger;
-use crate::data::shelly::{CoverData, SwitchData, Timestamped};
+use crate::data::CheckMessage;
+use crate::data::klimalogger::Sensorlogger;
+use crate::data::shelly::{ShellyLogger, Timestamped};
 
 mod data;
 
@@ -165,69 +165,27 @@ fn main() {
         // whatever) the server will get an unexpected drop and then
         // should emit the LWT message.
 
-        let switch_fields: &[(&str, fn(data: &SwitchData) -> WriteType, &str)] = &[
-            ("output", |data: &SwitchData| WriteType::Int(data.output as i32), "bool"),
-            ("power", |data: &SwitchData| WriteType::Float(data.power), "W"),
-            ("current", |data: &SwitchData| WriteType::Float(data.current), "A"),
-            ("voltage", |data: &SwitchData| WriteType::Float(data.voltage), "V"),
-            ("total_energy", |data: &SwitchData| WriteType::Float(data.energy.total), "Wh"),
-            ("temperature", |data: &SwitchData| WriteType::Float(data.temperature.t_celsius), "°C"),
-        ];
+        let shelly_logger = ShellyLogger::new(&iot_tx);
+        let sensor_logger = Sensorlogger::new(sensors_tx, ts_sensors_tx);
 
-        let cover_fields: &[(&str, fn(data: &CoverData) -> WriteType, &str)] = &[
-            ("position", |data: &CoverData| WriteType::Int(data.position), "%"),
-            ("power", |data: &CoverData| WriteType::Float(data.power), "W"),
-            ("current", |data: &CoverData| WriteType::Float(data.current), "A"),
-            ("voltage", |data: &CoverData| WriteType::Float(data.voltage), "V"),
-            ("total_energy", |data: &CoverData| WriteType::Float(data.energy.total), "Wh"),
-            ("temperature", |data: &CoverData| WriteType::Float(data.temperature.t_celsius), "°C"),
+        let iter: [(&str, &dyn CheckMessage);2] = [
+            ("shellies", &shelly_logger),
+            ("sensors", &sensor_logger),
         ];
+        let handler_map = HashMap::<&str, &dyn CheckMessage>::from_iter(iter);
 
         while let Some(msg_opt) = strm.next().await {
             if let Some(msg) = msg_opt {
-                if msg.topic().ends_with("/status/switch:0") {
-                    handle_message(&msg, &mut iot_tx, switch_fields);
-                } else if msg.topic().ends_with("/status/cover:0") {
-                    handle_message(&msg, &mut iot_tx, cover_fields);
-                } else if msg.topic().starts_with("sensors/") {
-                    let mut split = msg.topic().split("/");
-                    let location = split.nth(1).unwrap();
-                    let measurement = split.next().unwrap();
-
-                    let result = klimalogger::parse(&msg)?;
-
-                    if let Some(result) = result {
-                        println!("{} \"{}\": {:?}", location, measurement, &result);
-                        let timestamp = Timestamp::Seconds(result.timestamp as u128);
-                        let write_query = WriteQuery::new(timestamp, "data")
-                            .add_tag("type", measurement.to_string())
-                            .add_tag("location", location.to_string())
-                            .add_tag("sensor", result.sensor.to_string())
-                            .add_tag("calculated", result.calculated)
-                            .add_field("value", result.value);
-                        let write_query = if result.unit != "" {
-                            write_query.add_tag("unit", result.unit.to_string())
-                        } else {
-                            write_query
-                        };
-                        sensors_tx.send(write_query).expect("failed to send");
-
-                        let naive_date_time = chrono::NaiveDateTime::from_timestamp_opt(result.timestamp as i64, 0).expect("failed to convert timestamp");
-
-                        let date_time = DateTime::<Utc>::from_utc(naive_date_time, Utc);
-
-                        let sensor_reading = SensorReading {
-                            measurement: measurement.to_string(),
-                            time: date_time,
-                            location: location.to_string(),
-                            sensor: result.sensor.to_string(),
-                            value: result.value,
-                            unit: result.unit.to_string(),
-                            calculated: result.calculated,
-                        };
-                        ts_sensors_tx.send(sensor_reading).expect("failed to send");
+                let mut found = false;
+                for (&prefix, &call) in handler_map.iter() {
+                    let string = format!("{}/", prefix);
+                    if msg.topic().starts_with(&string) {
+                        found = true;
+                        call.check_message(&msg);
+                        break;
                     }
-                } else {
+                }
+                if !found {
                     println!("{} {:?}", msg.topic(), msg.payload_str());
                 }
             } else {
@@ -253,37 +211,6 @@ fn main() {
     }
 }
 
-fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(msg: &'a Message, iot_tx: &mut SyncSender<WriteQuery>, fields: &[(&str, fn(&T) -> WriteType, &str)]) {
-    let location = msg.topic().split("/").nth(1).unwrap();
-    let result: Option<T> = shelly::parse(&msg).unwrap();
-    if let Some(data) = result {
-        println!("{}: {:?}", location, data);
-
-        if let Some(minute_ts) = data.timestamp() {
-            let timestamp = Timestamp::Seconds(minute_ts as u128);
-            for (measurement, value, unit) in fields {
-                let query = WriteQuery::new(timestamp, *measurement);
-                let result = value(&data);
-                let query = match result {
-                    WriteType::Int(i) => {
-                        query.add_field("value", i)
-                    }
-                    WriteType::Float(f) => {
-                        query.add_field("value", f)
-                    }
-                };
-
-                let query = query.add_tag("location", location)
-                    .add_tag("sensor", "shelly")
-                    .add_tag("type", "switch")
-                    .add_tag("unit", unit);
-                iot_tx.send(query).expect("failed to send");
-            }
-        } else {
-            println!("{} no timestamp {:?}", msg.topic(), msg.payload_str());
-        }
-    }
-}
 
 fn start_influx_writer(iot_rx: Receiver<WriteQuery>, database: &str) {
     let influx_client = Client::new("http://influx:8086", database);

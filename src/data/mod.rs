@@ -1,9 +1,10 @@
+use paho_mqtt::Message;
+use serde::{Deserialize, Serialize};
+
 pub(crate) mod parse;
 mod opendtu;
 pub(crate) mod klimalogger;
 pub(crate) mod shelly;
-
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct LogEvent {
@@ -16,4 +17,8 @@ pub struct LogEvent {
     calculated: bool,
     time: String,
     value: f64,
+}
+
+pub trait CheckMessage {
+    fn check_message(&self, msg: &Message);
 }

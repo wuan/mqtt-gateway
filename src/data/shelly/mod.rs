@@ -1,6 +1,13 @@
 use std::fmt;
+use std::fmt::Debug;
+use std::sync::mpsc::SyncSender;
+
+use influxdb::{Timestamp, WriteQuery};
 use paho_mqtt::Message;
 use serde::{Deserialize, Serialize};
+
+use crate::data::{CheckMessage, shelly};
+use crate::WriteType;
 
 pub trait Timestamped {
     fn timestamp(&self) -> Option<i64>;
@@ -67,6 +74,16 @@ impl fmt::Debug for TemperatureData {
     }
 }
 
+pub struct ShellyLogger<'a> {
+    tx: &'a SyncSender<WriteQuery>,
+}
+
+impl <'a> ShellyLogger<'a> {
+    pub(crate) fn new(tx: &'a SyncSender<WriteQuery>) -> Self {
+        ShellyLogger { tx }
+    }
+}
+
 pub fn parse<'a, T: Deserialize<'a> + Clone>(msg: &'a Message) -> Result<Option<T>, &'static str> {
     let data = serde_json::from_slice::<T>(msg.payload()).map_err(|error| {
         eprintln!("{:?}", error);
@@ -75,6 +92,66 @@ pub fn parse<'a, T: Deserialize<'a> + Clone>(msg: &'a Message) -> Result<Option<
     Ok(Some(data.clone()))
 }
 
+const SWITCH_FIELDS: &[(&str, fn(data: &SwitchData) -> WriteType, &str)] = &[
+    ("output", |data: &SwitchData| WriteType::Int(data.output as i32), "bool"),
+    ("power", |data: &SwitchData| WriteType::Float(data.power), "W"),
+    ("current", |data: &SwitchData| WriteType::Float(data.current), "A"),
+    ("voltage", |data: &SwitchData| WriteType::Float(data.voltage), "V"),
+    ("total_energy", |data: &SwitchData| WriteType::Float(data.energy.total), "Wh"),
+    ("temperature", |data: &SwitchData| WriteType::Float(data.temperature.t_celsius), "°C"),
+];
+
+const COVER_FIELDS: &[(&str, fn(data: &CoverData) -> WriteType, &str)] = &[
+    ("position", |data: &CoverData| WriteType::Int(data.position), "%"),
+    ("power", |data: &CoverData| WriteType::Float(data.power), "W"),
+    ("current", |data: &CoverData| WriteType::Float(data.current), "A"),
+    ("voltage", |data: &CoverData| WriteType::Float(data.voltage), "V"),
+    ("total_energy", |data: &CoverData| WriteType::Float(data.energy.total), "Wh"),
+    ("temperature", |data: &CoverData| WriteType::Float(data.temperature.t_celsius), "°C"),
+];
+
+impl CheckMessage for ShellyLogger<'_> {
+    fn check_message(&self, msg: &Message) {
+        let topic = msg.topic();
+        if topic.ends_with("/status/switch:0") {
+            handle_message(msg, &self.tx, SWITCH_FIELDS);
+        } else if topic.ends_with("/status/cover:0") {
+            handle_message(msg, &self.tx, COVER_FIELDS);
+        }
+    }
+}
+
+fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(msg: &'a Message, iot_tx: &SyncSender<WriteQuery>, fields: &[(&str, fn(&T) -> WriteType, &str)]) {
+    let location = msg.topic().split("/").nth(1).unwrap();
+    let result: Option<T> = shelly::parse(&msg).unwrap();
+    if let Some(data) = result {
+        println!("{}: {:?}", location, data);
+
+        if let Some(minute_ts) = data.timestamp() {
+            let timestamp = Timestamp::Seconds(minute_ts as u128);
+            for (measurement, value, unit) in fields {
+                let query = WriteQuery::new(timestamp, *measurement);
+                let result = value(&data);
+                let query = match result {
+                    WriteType::Int(i) => {
+                        query.add_field("value", i)
+                    }
+                    WriteType::Float(f) => {
+                        query.add_field("value", f)
+                    }
+                };
+
+                let query = query.add_tag("location", location)
+                    .add_tag("sensor", "shelly")
+                    .add_tag("type", "switch")
+                    .add_tag("unit", unit);
+                iot_tx.send(query).expect("failed to send");
+            }
+        } else {
+            println!("{} no timestamp {:?}", msg.topic(), msg.payload_str());
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
