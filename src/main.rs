@@ -156,7 +156,7 @@ fn create_shelly_logger() -> (ShellyLogger, JoinHandle<()>) {
         start_influx_writer(rx, database);
     });
 
-    let mut logger = ShellyLogger::new(tx);
+    let logger = ShellyLogger::new(tx);
 
     (logger, influx_writer_handle)
 }
