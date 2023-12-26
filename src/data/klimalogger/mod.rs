@@ -45,7 +45,7 @@ impl CheckMessage for SensorLogger {
         let result = parse(&msg).unwrap();
 
         if let Some(result) = result {
-            println!("{} \"{}\": {:?}", location, measurement, &result);
+            println!("Sensor {} \"{}\": {:?}", location, measurement, &result);
 
             let timestamp = Timestamp::Seconds(result.timestamp as u128);
             let write_query = WriteQuery::new(timestamp, "data")
