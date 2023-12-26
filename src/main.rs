@@ -170,23 +170,23 @@ fn create_shelly_logger() -> (ShellyLogger, JoinHandle<()>) {
 }
 
 fn create_sensor_logger(db_config: Config) -> (SensorLogger, JoinHandle<()>, JoinHandle<()>) {
-    let (sensors_tx, sensors_rx) = sync_channel(100);
+    let (tx, rx) = sync_channel(100);
 
     let influx_writer_handle = thread::spawn(move || {
         println!("starting influx writer");
         let database = "klima";
 
-        start_influx_writer(sensors_rx, database);
+        start_influx_writer(rx, database);
     });
 
-    let (ts_sensors_tx, ts_sensors_rx) = sync_channel(100);
+    let (ts_tx, ts_rx) = sync_channel(100);
 
     let postgres_writer_handle = thread::spawn(move || {
         println!("starting postgres writer");
-        start_postgres_writer(ts_sensors_rx, db_config);
+        start_postgres_writer(ts_rx, db_config);
     });
 
-    let logger = SensorLogger::new(sensors_tx, ts_sensors_tx);
+    let logger = SensorLogger::new(tx, ts_tx);
     (logger, influx_writer_handle, postgres_writer_handle)
 }
 

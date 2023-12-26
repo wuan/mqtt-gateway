@@ -121,11 +121,11 @@ impl CheckMessage for ShellyLogger {
     }
 }
 
-fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(msg: &'a Message, iot_tx: &SyncSender<WriteQuery>, fields: &[(&str, fn(&T) -> WriteType, &str)]) {
+fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(msg: &'a Message, tx: &SyncSender<WriteQuery>, fields: &[(&str, fn(&T) -> WriteType, &str)]) {
     let location = msg.topic().split("/").nth(1).unwrap();
     let result: Option<T> = shelly::parse(&msg).unwrap();
     if let Some(data) = result {
-        println!("{}: {:?}", location, data);
+        println!("Shelly {}: {:?}", location, data);
 
         if let Some(minute_ts) = data.timestamp() {
             let timestamp = Timestamp::Seconds(minute_ts as u128);
@@ -145,7 +145,7 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(msg: &'a
                     .add_tag("sensor", "shelly")
                     .add_tag("type", "switch")
                     .add_tag("unit", unit);
-                iot_tx.send(query).expect("failed to send");
+                tx.send(query).expect("failed to send");
             }
         } else {
             println!("{} no timestamp {:?}", msg.topic(), msg.payload_str());
