@@ -6,7 +6,7 @@ use std::thread::JoinHandle;
 
 use chrono::{DateTime, Utc};
 use futures::{executor::block_on, stream::StreamExt};
-use influxdb::{Client, WriteQuery};
+use influxdb::{Client, Timestamp, WriteQuery};
 use paho_mqtt as mqtt;
 use paho_mqtt::QOS_1;
 use postgres::{Config, NoTls};
@@ -16,6 +16,7 @@ use crate::data::klimalogger::SensorLogger;
 use crate::data::opendtu::OpenDTULogger;
 use crate::data::shelly::ShellyLogger;
 
+mod config;
 mod data;
 
 
@@ -23,7 +24,7 @@ mod data;
 const TOPICS: &[&str] = &["sensors/#", "shellies/#", "solar/#"];
 const QOS: &[i32] = &[QOS_1, QOS_1, QOS_1];
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct SensorReading {
     measurement: String,
     time: DateTime<Utc>,
@@ -153,7 +154,7 @@ fn create_shelly_logger() -> (ShellyLogger, JoinHandle<()>) {
         println!("starting influx writer");
         let database = "iot";
 
-        start_influx_writer(rx, database);
+        start_influx_writer(rx, database, std::convert::identity);
     });
 
     let logger = ShellyLogger::new(tx);
@@ -168,7 +169,22 @@ fn create_sensor_logger(db_config: Config) -> (SensorLogger, JoinHandle<()>, Joi
         println!("starting influx writer");
         let database = "klima";
 
-        start_influx_writer(rx, database);
+        fn mapper(result: SensorReading) -> WriteQuery {
+            let timestamp = Timestamp::Seconds(result.time.timestamp() as u128);
+            let write_query = WriteQuery::new(timestamp, "data")
+                .add_tag("type", result.measurement.to_string())
+                .add_tag("location", result.location.to_string())
+                .add_tag("sensor", result.sensor.to_string())
+                .add_tag("calculated", result.calculated)
+                .add_field("value", result.value);
+            if result.unit != "" {
+                write_query.add_tag("unit", result.unit.to_string())
+            } else {
+                write_query
+            }
+        }
+
+        start_influx_writer(rx, database, mapper);
     });
 
     let (ts_tx, ts_rx) = sync_channel(100);
@@ -178,7 +194,7 @@ fn create_sensor_logger(db_config: Config) -> (SensorLogger, JoinHandle<()>, Joi
         start_postgres_writer(ts_rx, db_config);
     });
 
-    let logger = SensorLogger::new(tx, ts_tx);
+    let logger = SensorLogger::new(vec![tx, ts_tx]);
     (logger, influx_writer_handle, postgres_writer_handle)
 }
 
@@ -187,7 +203,7 @@ fn create_opendtu_logger() -> (OpenDTULogger, JoinHandle<()>) {
 
     let influx_writer_handle = thread::spawn(move || {
         println!("starting OpenDTU influx writer");
-        start_influx_writer(rx, "solar");
+        start_influx_writer(rx, "solar", std::convert::identity);
     });
 
     let logger = OpenDTULogger::new(tx);
@@ -195,20 +211,21 @@ fn create_opendtu_logger() -> (OpenDTULogger, JoinHandle<()>) {
     (logger, influx_writer_handle)
 }
 
-fn start_influx_writer(iot_rx: Receiver<WriteQuery>, database: &str) {
+fn start_influx_writer<T>(iot_rx: Receiver<T>, database: &str, query_mapper: fn(T) -> WriteQuery) {
     let influx_client = Client::new("http://influx:8086", database);
     block_on(async move {
         println!("starting influx writer async");
 
         loop {
             let result = iot_rx.recv();
-            let query = match result {
+            let data = match result {
                 Ok(query) => { query }
                 Err(error) => {
                     println!("error receiving query: {:?}", error);
                     break;
                 }
             };
+            let query = query_mapper(data);
             let _ = influx_client.query(query).await.expect("failed to write to influx");
         }
         println!("exiting influx writer async");
