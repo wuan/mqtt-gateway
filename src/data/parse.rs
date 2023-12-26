@@ -1,4 +1,4 @@
-use chrono::{Datelike, DateTime};
+use chrono::DateTime;
 
 pub fn parse_timestamp(timestamp_string: &str) -> Result<i64, &'static str> {
     Ok(DateTime::parse_from_rfc3339(timestamp_string).expect("parse failed").timestamp())

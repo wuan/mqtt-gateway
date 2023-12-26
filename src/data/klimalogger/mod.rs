@@ -62,7 +62,7 @@ impl CheckMessage for SensorLogger {
             self.tx.send(write_query).expect("failed to send");
 
             let naive_date_time = chrono::NaiveDateTime::from_timestamp_opt(result.timestamp as i64, 0).expect("failed to convert timestamp");
-            let date_time = DateTime::<Utc>::from_utc(naive_date_time, Utc);
+            let date_time = DateTime::<Utc>::from_naive_utc_and_offset(naive_date_time, Utc);
 
             let sensor_reading = SensorReading {
                 measurement: measurement.to_string(),
@@ -77,8 +77,6 @@ impl CheckMessage for SensorLogger {
         }
     }
 }
-
-pub fn resend() {}
 
 pub fn parse(msg: &Message) -> Result<Option<Data>, &'static str> {
     let data = serde_json::from_slice::<Data>(msg.payload()).map_err(|error| {
