@@ -1,23 +1,20 @@
 use std::{env, process, thread, time::Duration};
 use std::fmt::Debug;
-use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{Receiver, sync_channel};
 use std::thread::JoinHandle;
 
-use async_std::prelude::FutureExt;
 use chrono::{DateTime, Utc};
-use futures::{executor::block_on, SinkExt, stream::StreamExt};
-use influxdb::{Client, Query, WriteQuery};
+use futures::{executor::block_on, stream::StreamExt};
+use influxdb::{Client, WriteQuery};
 use paho_mqtt as mqtt;
 use paho_mqtt::QOS_1;
 use postgres::{Config, NoTls};
-use serde::{Deserialize, Serialize};
 
 use crate::data::CheckMessage;
 use crate::data::klimalogger::SensorLogger;
 use crate::data::opendtu::OpenDTULogger;
-use crate::data::shelly::{ShellyLogger, Timestamped};
+use crate::data::shelly::ShellyLogger;
 
 mod data;
 
@@ -45,11 +42,6 @@ pub enum WriteType {
 fn main() {
     // Initialize the logger from the environment
     env_logger::init();
-
-    let u = match env::var_os("USER") {
-        Some(v) => v.into_string().unwrap(),
-        None => panic!("$USER is not set")
-    };
 
     let host = env::var_os("PG_HOST").unwrap().into_string().unwrap();
     let port = env::var_os("PG_PORT").unwrap().into_string().unwrap();
@@ -81,9 +73,9 @@ fn main() {
         process::exit(1);
     });
 
-    let (mut shelly_logger, iot_influx_writer_handle) = create_shelly_logger();
+    let (shelly_logger, iot_influx_writer_handle) = create_shelly_logger();
 
-    let (mut sensor_logger, sensors_influx_writer_handle, sensors_postgres_writer_handle) = create_sensor_logger(db_config);
+    let (sensor_logger, sensors_influx_writer_handle, sensors_postgres_writer_handle) = create_sensor_logger(db_config);
 
     let (opendtu_logger, solar_influx_writer_handle) = create_opendtu_logger();
 
@@ -92,7 +84,6 @@ fn main() {
         ("sensors".to_string(), Arc::new(Mutex::new(sensor_logger))),
         ("solar".to_string(), Arc::new(Mutex::new(opendtu_logger))),
     ];
-    // let handler_map = HashMap::<&str, &mut dyn CheckMessage>::from_iter(iter);
 
     if let Err(err) = block_on(async {
         // Get message stream before connecting.
@@ -146,6 +137,7 @@ fn main() {
         iot_influx_writer_handle.join().expect("failed to join influx writer thread");
         sensors_influx_writer_handle.join().expect("failed to join influx writer thread");
         sensors_postgres_writer_handle.join().expect("failed to join influx writer thread");
+        solar_influx_writer_handle.join().expect("failed to join influx writer thread");
 
         // Explicit return type for the async block
         Ok::<(), mqtt::Error>(())
