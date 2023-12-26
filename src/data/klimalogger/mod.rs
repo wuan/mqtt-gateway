@@ -39,41 +39,45 @@ impl SensorLogger {
 impl CheckMessage for SensorLogger {
     fn check_message(&mut self, msg: &Message) {
         let mut split = msg.topic().split("/");
-        let location = split.nth(1).unwrap();
-        let measurement = split.next().unwrap();
 
-        let result = parse(&msg).unwrap();
+        let location = split.nth(1);
+        let measurement = split.next();
+        let result = parse(&msg);
+        if let (Some(location), Some(measurement), Ok(result)) = (
+            location, measurement, result.clone()) {
+            if let Some(result) = result {
+                println!("Sensor {} \"{}\": {:?}", location, measurement, &result);
 
-        if let Some(result) = result {
-            println!("Sensor {} \"{}\": {:?}", location, measurement, &result);
+                let timestamp = Timestamp::Seconds(result.timestamp as u128);
+                let write_query = WriteQuery::new(timestamp, "data")
+                    .add_tag("type", measurement.to_string())
+                    .add_tag("location", location.to_string())
+                    .add_tag("sensor", result.sensor.to_string())
+                    .add_tag("calculated", result.calculated)
+                    .add_field("value", result.value);
+                let write_query = if result.unit != "" {
+                    write_query.add_tag("unit", result.unit.to_string())
+                } else {
+                    write_query
+                };
+                self.tx.send(write_query).expect("failed to send");
 
-            let timestamp = Timestamp::Seconds(result.timestamp as u128);
-            let write_query = WriteQuery::new(timestamp, "data")
-                .add_tag("type", measurement.to_string())
-                .add_tag("location", location.to_string())
-                .add_tag("sensor", result.sensor.to_string())
-                .add_tag("calculated", result.calculated)
-                .add_field("value", result.value);
-            let write_query = if result.unit != "" {
-                write_query.add_tag("unit", result.unit.to_string())
-            } else {
-                write_query
-            };
-            self.tx.send(write_query).expect("failed to send");
+                let naive_date_time = chrono::NaiveDateTime::from_timestamp_opt(result.timestamp as i64, 0).expect("failed to convert timestamp");
+                let date_time = DateTime::<Utc>::from_naive_utc_and_offset(naive_date_time, Utc);
 
-            let naive_date_time = chrono::NaiveDateTime::from_timestamp_opt(result.timestamp as i64, 0).expect("failed to convert timestamp");
-            let date_time = DateTime::<Utc>::from_naive_utc_and_offset(naive_date_time, Utc);
-
-            let sensor_reading = SensorReading {
-                measurement: measurement.to_string(),
-                time: date_time,
-                location: location.to_string(),
-                sensor: result.sensor.to_string(),
-                value: result.value,
-                unit: result.unit.to_string(),
-                calculated: result.calculated,
-            };
-            self.ts_tx.send(sensor_reading).expect("failed to send");
+                let sensor_reading = SensorReading {
+                    measurement: measurement.to_string(),
+                    time: date_time,
+                    location: location.to_string(),
+                    sensor: result.sensor.to_string(),
+                    value: result.value,
+                    unit: result.unit.to_string(),
+                    calculated: result.calculated,
+                };
+                self.ts_tx.send(sensor_reading).expect("failed to send");
+            }
+        } else {
+            println!("FAILED: {:?}, {:?}, {:?}", location, measurement, result);
         }
     }
 }
