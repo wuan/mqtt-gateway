@@ -25,19 +25,19 @@ impl fmt::Debug for Data {
     }
 }
 
-pub struct Sensorlogger {
+pub struct SensorLogger {
     tx: SyncSender<WriteQuery>,
     ts_tx: SyncSender<SensorReading>,
 }
 
-impl Sensorlogger {
+impl SensorLogger {
     pub(crate) fn new(tx: SyncSender<WriteQuery>, ts_tx: SyncSender<SensorReading>) -> Self {
-        Sensorlogger { tx, ts_tx }
+        SensorLogger { tx, ts_tx }
     }
 }
 
-impl CheckMessage for Sensorlogger {
-    fn check_message(&self, msg: &Message) {
+impl CheckMessage for SensorLogger {
+    fn check_message(&mut self, msg: &Message) {
         let mut split = msg.topic().split("/");
         let location = split.nth(1).unwrap();
         let measurement = split.next().unwrap();

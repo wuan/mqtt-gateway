@@ -2,7 +2,7 @@ use paho_mqtt::Message;
 use serde::{Deserialize, Serialize};
 
 pub(crate) mod parse;
-mod opendtu;
+pub(crate) mod opendtu;
 pub(crate) mod klimalogger;
 pub(crate) mod shelly;
 
@@ -20,5 +20,5 @@ pub struct LogEvent {
 }
 
 pub trait CheckMessage {
-    fn check_message(&self, msg: &Message);
+    fn check_message(&mut self, msg: &Message);
 }

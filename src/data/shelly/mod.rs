@@ -74,12 +74,12 @@ impl fmt::Debug for TemperatureData {
     }
 }
 
-pub struct ShellyLogger<'a> {
-    tx: &'a SyncSender<WriteQuery>,
+pub struct ShellyLogger {
+    tx: SyncSender<WriteQuery>,
 }
 
-impl <'a> ShellyLogger<'a> {
-    pub(crate) fn new(tx: &'a SyncSender<WriteQuery>) -> Self {
+impl ShellyLogger {
+    pub(crate) fn new(tx: SyncSender<WriteQuery>) -> Self {
         ShellyLogger { tx }
     }
 }
@@ -110,8 +110,8 @@ const COVER_FIELDS: &[(&str, fn(data: &CoverData) -> WriteType, &str)] = &[
     ("temperature", |data: &CoverData| WriteType::Float(data.temperature.t_celsius), "°C"),
 ];
 
-impl CheckMessage for ShellyLogger<'_> {
-    fn check_message(&self, msg: &Message) {
+impl CheckMessage for ShellyLogger {
+    fn check_message(&mut self, msg: &Message) {
         let topic = msg.topic();
         if topic.ends_with("/status/switch:0") {
             handle_message(msg, &self.tx, SWITCH_FIELDS);
