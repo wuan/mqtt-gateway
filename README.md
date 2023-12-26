@@ -1,3 +1,8 @@
-# mqtt-influxdb-gateway
+# mqtt-gateway
 
-This is an example for a gateway component which writes messages received through a MQTT channel into an InfluxDB time series database.
+This is an example for a gateway component which receives MQTT messages from 
+* OpenDTU
+* Shelly (Generic status update)
+* Sensor data (Klimalooger)
+
+and writes the data into InfluxDB / TimescaleDB time series databases.
