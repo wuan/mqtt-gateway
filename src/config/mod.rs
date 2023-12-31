@@ -41,6 +41,8 @@ pub enum Target {
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 pub struct Config {
     pub(crate) sources: Vec<Source>,
+    #[serde(rename = "mqttUrl")]
+    pub(crate) mqtt_url: String,
 }
 
 #[cfg(test)]
