@@ -2,7 +2,6 @@ use std::fmt;
 use std::sync::mpsc::SyncSender;
 
 use chrono::{DateTime, Utc};
-use influxdb::{Timestamp, WriteQuery};
 use paho_mqtt::Message;
 use serde::{Deserialize, Serialize};
 
@@ -26,13 +25,12 @@ impl fmt::Debug for Data {
 }
 
 pub struct SensorLogger {
-    tx: SyncSender<WriteQuery>,
-    ts_tx: SyncSender<SensorReading>,
+    tx: Vec::<SyncSender<SensorReading>>,
 }
 
 impl SensorLogger {
-    pub(crate) fn new(tx: SyncSender<WriteQuery>, ts_tx: SyncSender<SensorReading>) -> Self {
-        SensorLogger { tx, ts_tx }
+    pub(crate) fn new(tx: Vec::<SyncSender<SensorReading>>) -> Self {
+        SensorLogger { tx }
     }
 }
 
@@ -48,20 +46,6 @@ impl CheckMessage for SensorLogger {
             if let Some(result) = result {
                 println!("Sensor {} \"{}\": {:?}", location, measurement, &result);
 
-                let timestamp = Timestamp::Seconds(result.timestamp as u128);
-                let write_query = WriteQuery::new(timestamp, "data")
-                    .add_tag("type", measurement.to_string())
-                    .add_tag("location", location.to_string())
-                    .add_tag("sensor", result.sensor.to_string())
-                    .add_tag("calculated", result.calculated)
-                    .add_field("value", result.value);
-                let write_query = if result.unit != "" {
-                    write_query.add_tag("unit", result.unit.to_string())
-                } else {
-                    write_query
-                };
-                self.tx.send(write_query).expect("failed to send");
-
                 let naive_date_time = chrono::NaiveDateTime::from_timestamp_opt(result.timestamp as i64, 0).expect("failed to convert timestamp");
                 let date_time = DateTime::<Utc>::from_naive_utc_and_offset(naive_date_time, Utc);
 
@@ -74,7 +58,10 @@ impl CheckMessage for SensorLogger {
                     unit: result.unit.to_string(),
                     calculated: result.calculated,
                 };
-                self.ts_tx.send(sensor_reading).expect("failed to send");
+
+                for tx in &self.tx {
+                    tx.send(sensor_reading.clone()).expect("failed to send");
+                }
             }
         } else {
             println!("FAILED: {:?}, {:?}, {:?}", location, measurement, result);
