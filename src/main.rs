@@ -1,29 +1,27 @@
-use std::{env, process, thread, time::Duration};
+use std::{fs, process, thread, time::Duration};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{Receiver, sync_channel};
+use std::sync::mpsc::{Receiver, sync_channel, SyncSender};
 use std::thread::JoinHandle;
 
 use chrono::{DateTime, Utc};
 use futures::{executor::block_on, stream::StreamExt};
-use influxdb::{Client, WriteQuery};
+use influxdb::{Client, Timestamp, WriteQuery};
 use paho_mqtt as mqtt;
 use paho_mqtt::QOS_1;
 use postgres::{Config, NoTls};
 
+use crate::config::{SourceType, Target};
 use crate::data::CheckMessage;
 use crate::data::klimalogger::SensorLogger;
 use crate::data::opendtu::OpenDTULogger;
 use crate::data::shelly::ShellyLogger;
 
+mod config;
 mod data;
 
-
-// The topics to which we subscribe.
-const TOPICS: &[&str] = &["sensors/#", "shellies/#", "solar/#"];
-const QOS: &[i32] = &[QOS_1, QOS_1, QOS_1];
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct SensorReading {
     measurement: String,
     time: DateTime<Utc>,
@@ -43,22 +41,37 @@ fn main() {
     // Initialize the logger from the environment
     env_logger::init();
 
-    let host = env::var_os("PG_HOST").unwrap().into_string().unwrap();
-    let port = env::var_os("PG_PORT").unwrap().into_string().unwrap();
-    let user = env::var_os("PG_USER").unwrap().into_string().unwrap();
-    let password = env::var_os("PG_PASSWORD").unwrap().into_string().unwrap();
-    let database = env::var_os("PG_DATABASE").unwrap().into_string().unwrap();
-    let mut db_config = postgres::Config::new();
-    let _ = db_config
-        .host(&host)
-        .port(port.parse::<u16>().unwrap())
-        .user(&user)
-        .password(password)
-        .dbname(&database);
+    let config_string = fs::read_to_string("config.yml").expect("failed to read config file");
+    let config: config::Config = serde_yaml::from_str(&config_string).expect("failed to parse config file");
 
-    let host = env::args()
-        .nth(1)
-        .unwrap_or_else(|| "mqtt://mqtt:1883".to_string());
+    println!("config: {:?}", config);
+
+    let mut handler_map: HashMap::<String, Arc<Mutex<dyn CheckMessage>>> = HashMap::new();
+    let mut handles: Vec<JoinHandle<()>> = Vec::new();
+    let mut topics: Vec<String> = Vec::new();
+    let mut qoss: Vec<i32> = Vec::new();
+
+
+    for source in config.sources {
+        let (logger, mut source_handles) = match source.source_type {
+            SourceType::Shelly => {
+                create_shelly_logger(source.targets)
+            }
+            SourceType::Sensor => {
+                create_sensor_logger(source.targets)
+            }
+            SourceType::OpenDTU => {
+                create_opendtu_logger(source.targets)
+            }
+        };
+        handler_map.insert(source.prefix.clone(), logger);
+        handles.append(&mut source_handles);
+
+        topics.push(format!("{}/#", source.prefix));
+        qoss.push(QOS_1);
+    }
+
+    let host = config.mqtt_url;
 
     println!("Connecting to the MQTT server at '{}'...", host);
 
@@ -67,27 +80,14 @@ fn main() {
         .client_id("sensors_gateway")
         .finalize();
 
-    // Create the client connection
-    let mut cli = mqtt::AsyncClient::new(create_opts).unwrap_or_else(|e| {
+    let mut mqtt_client = mqtt::AsyncClient::new(create_opts).unwrap_or_else(|e| {
         println!("Error creating the client: {:?}", e);
         process::exit(1);
     });
 
-    let (shelly_logger, iot_influx_writer_handle) = create_shelly_logger();
-
-    let (sensor_logger, sensors_influx_writer_handle, sensors_postgres_writer_handle) = create_sensor_logger(db_config);
-
-    let (opendtu_logger, solar_influx_writer_handle) = create_opendtu_logger();
-
-    let handlers: [(String, Arc<Mutex<dyn CheckMessage>>); 3] = [
-        ("shellies".to_string(), Arc::new(Mutex::new(shelly_logger))),
-        ("sensors".to_string(), Arc::new(Mutex::new(sensor_logger))),
-        ("solar".to_string(), Arc::new(Mutex::new(opendtu_logger))),
-    ];
-
     if let Err(err) = block_on(async {
         // Get message stream before connecting.
-        let mut strm = cli.get_stream(25);
+        let mut strm = mqtt_client.get_stream(25);
 
         let conn_opts = mqtt::ConnectOptionsBuilder::new_v5()
             .keep_alive_interval(Duration::from_secs(30))
@@ -95,38 +95,27 @@ fn main() {
             .automatic_reconnect(Duration::from_secs(1), Duration::from_secs(300))
             .finalize();
 
-        cli.connect(conn_opts).await?;
+        mqtt_client.connect(conn_opts).await?;
 
-        println!("Subscribing to topics: {:?}", TOPICS);
-        cli.subscribe_many(TOPICS, QOS).await?;
+        println!("Subscribing to topics: {:?}", &topics);
+        mqtt_client.subscribe_many(&*topics, &*qoss).await?;
 
-        // Just loop on incoming messages.
         println!("Waiting for messages...");
-
-        // Note that we're not providing a way to cleanly shut down and
-        // disconnect. Therefore, when you kill this app (with a ^C or
-        // whatever) the server will get an unexpected drop and then
-        // should emit the LWT message.
-
 
         while let Some(msg_opt) = strm.next().await {
             if let Some(msg) = msg_opt {
-                let mut found = false;
-                for (prefix, call) in &handlers {
-                    let string = format!("{}/", prefix);
-                    if msg.topic().starts_with(&string) {
-                        found = true;
-                        call.lock().unwrap().check_message(&msg);
-                        break;
-                    }
-                }
-                if !found {
-                    println!("{} {:?}", msg.topic(), msg.payload_str());
+                let prefix = msg.topic().split("/").next().unwrap();
+
+                let handler = handler_map.get(prefix);
+                if let Some(handler) = handler {
+                    handler.lock().unwrap().check_message(&msg);
+                } else {
+                    println!("unhandled prefix {} from topic {}", prefix, msg.topic());
                 }
             } else {
                 // A "None" means we were disconnected. Try to reconnect...
-                println!("Lost connection. Attempting reconnect. {:?}", cli.is_connected());
-                while let Err(err) = cli.reconnect().await {
+                println!("Lost connection. Attempting reconnect. {:?}", mqtt_client.is_connected());
+                while let Err(err) = mqtt_client.reconnect().await {
                     println!("Error reconnecting: {}", err);
                     // For tokio use: tokio::time::delay_for()
                     async_std::task::sleep(Duration::from_millis(1000)).await;
@@ -134,10 +123,9 @@ fn main() {
             }
         }
 
-        iot_influx_writer_handle.join().expect("failed to join influx writer thread");
-        sensors_influx_writer_handle.join().expect("failed to join influx writer thread");
-        sensors_postgres_writer_handle.join().expect("failed to join influx writer thread");
-        solar_influx_writer_handle.join().expect("failed to join influx writer thread");
+        for handle in handles {
+            handle.join().expect("failed to join influx writer thread");
+        }
 
         // Explicit return type for the async block
         Ok::<(), mqtt::Error>(())
@@ -146,69 +134,108 @@ fn main() {
     }
 }
 
-fn create_shelly_logger() -> (ShellyLogger, JoinHandle<()>) {
+fn blabla(p0: String) {
+    todo!()
+}
+
+fn create_shelly_logger(_vec: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage>>, Vec::<JoinHandle<()>>) {
     let (tx, rx) = sync_channel(100);
 
     let influx_writer_handle = thread::spawn(move || {
         println!("starting influx writer");
         let database = "iot";
 
-        start_influx_writer(rx, database);
+        start_influx_writer(rx, database, std::convert::identity);
     });
 
     let logger = ShellyLogger::new(tx);
 
-    (logger, influx_writer_handle)
+    (Arc::new(Mutex::new(logger)), vec![influx_writer_handle])
 }
 
-fn create_sensor_logger(db_config: Config) -> (SensorLogger, JoinHandle<()>, JoinHandle<()>) {
-    let (tx, rx) = sync_channel(100);
+fn create_sensor_logger(targets: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage>>, Vec::<JoinHandle<()>>) {
+    let mut txs: Vec<SyncSender<SensorReading>> = Vec::new();
+    let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
-    let influx_writer_handle = thread::spawn(move || {
-        println!("starting influx writer");
-        let database = "klima";
+    for target in targets {
+        let (tx, handle) = match target {
+            Target::InfluxDB { .. } => {
+                let (tx, rx) = sync_channel(100);
 
-        start_influx_writer(rx, database);
-    });
+                (tx, thread::spawn(move || {
+                    println!("starting influx writer");
+                    let database = "klima";
 
-    let (ts_tx, ts_rx) = sync_channel(100);
+                    fn mapper(result: SensorReading) -> WriteQuery {
+                        let timestamp = Timestamp::Seconds(result.time.timestamp() as u128);
+                        let write_query = WriteQuery::new(timestamp, "data")
+                            .add_tag("type", result.measurement.to_string())
+                            .add_tag("location", result.location.to_string())
+                            .add_tag("sensor", result.sensor.to_string())
+                            .add_tag("calculated", result.calculated)
+                            .add_field("value", result.value);
+                        if result.unit != "" {
+                            write_query.add_tag("unit", result.unit.to_string())
+                        } else {
+                            write_query
+                        }
+                    }
 
-    let postgres_writer_handle = thread::spawn(move || {
-        println!("starting postgres writer");
-        start_postgres_writer(ts_rx, db_config);
-    });
+                    start_influx_writer(rx, database, mapper);
+                }))
+            }
+            Target::Postgresql { host, port, user, password, database } => {
+                let (tx, rx) = sync_channel(100);
 
-    let logger = SensorLogger::new(tx, ts_tx);
-    (logger, influx_writer_handle, postgres_writer_handle)
+                let mut db_config = postgres::Config::new();
+                let _ = db_config
+                    .host(&host)
+                    .port(port)
+                    .user(&user)
+                    .password(password)
+                    .dbname(&database);
+
+                (tx, thread::spawn(move || {
+                    println!("starting postgres writer");
+                    start_postgres_writer(rx, db_config);
+                }))
+            }
+        };
+        txs.push(tx);
+        handles.push(handle);
+    }
+
+    (Arc::new(Mutex::new(SensorLogger::new(txs))), handles)
 }
 
-fn create_opendtu_logger() -> (OpenDTULogger, JoinHandle<()>) {
+fn create_opendtu_logger(_vec: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage>>, Vec::<JoinHandle<()>>) {
     let (tx, rx) = sync_channel(100);
 
     let influx_writer_handle = thread::spawn(move || {
         println!("starting OpenDTU influx writer");
-        start_influx_writer(rx, "solar");
+        start_influx_writer(rx, "solar", std::convert::identity);
     });
 
     let logger = OpenDTULogger::new(tx);
 
-    (logger, influx_writer_handle)
+    (Arc::new(Mutex::new(logger)), vec![influx_writer_handle])
 }
 
-fn start_influx_writer(iot_rx: Receiver<WriteQuery>, database: &str) {
+fn start_influx_writer<T>(iot_rx: Receiver<T>, database: &str, query_mapper: fn(T) -> WriteQuery) {
     let influx_client = Client::new("http://influx:8086", database);
     block_on(async move {
         println!("starting influx writer async");
 
         loop {
             let result = iot_rx.recv();
-            let query = match result {
+            let data = match result {
                 Ok(query) => { query }
                 Err(error) => {
                     println!("error receiving query: {:?}", error);
                     break;
                 }
             };
+            let query = query_mapper(data);
             let _ = influx_client.query(query).await.expect("failed to write to influx");
         }
         println!("exiting influx writer async");

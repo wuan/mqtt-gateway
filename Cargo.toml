@@ -16,4 +16,7 @@ influxdb = { version = "0.7.1", default-features = false, features = ["h1-client
 time = { version = "0.3.30", features = ["serde", "serde-well-known"] }
 chrono = "0.4.31"
 postgres = { version = "0.19.7" , features = ["with-chrono-0_4"] }
+config = { version = "0.10.1", features = [] }
+serde_yaml = { version = "0.9.29", features = [] }
+clap = { version = "4.4.11", features = ["derive"] }
 
