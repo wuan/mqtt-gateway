@@ -1,7 +1,8 @@
-use std::{env, process, thread, time::Duration};
+use std::{env, fs, process, thread, time::Duration};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{Receiver, sync_channel};
+use std::sync::mpsc::{Receiver, sync_channel, SyncSender};
 use std::thread::JoinHandle;
 
 use chrono::{DateTime, Utc};
@@ -11,6 +12,7 @@ use paho_mqtt as mqtt;
 use paho_mqtt::QOS_1;
 use postgres::{Config, NoTls};
 
+use crate::config::{SourceType, Target};
 use crate::data::CheckMessage;
 use crate::data::klimalogger::SensorLogger;
 use crate::data::opendtu::OpenDTULogger;
@@ -44,18 +46,29 @@ fn main() {
     // Initialize the logger from the environment
     env_logger::init();
 
-    let host = env::var_os("PG_HOST").unwrap().into_string().unwrap();
-    let port = env::var_os("PG_PORT").unwrap().into_string().unwrap();
-    let user = env::var_os("PG_USER").unwrap().into_string().unwrap();
-    let password = env::var_os("PG_PASSWORD").unwrap().into_string().unwrap();
-    let database = env::var_os("PG_DATABASE").unwrap().into_string().unwrap();
-    let mut db_config = postgres::Config::new();
-    let _ = db_config
-        .host(&host)
-        .port(port.parse::<u16>().unwrap())
-        .user(&user)
-        .password(password)
-        .dbname(&database);
+    let config_string = fs::read_to_string("config.yml").expect("failed to read config file");
+    let config: config::Config = serde_yaml::from_str(&config_string).expect("failed to parse config file");
+
+    println!("config: {:?}", config);
+
+    let mut handler_map: HashMap::<String, Arc<Mutex<dyn CheckMessage>>> = HashMap::new();
+    let mut handles: Vec<JoinHandle<()>> = Vec::new();
+
+    for source in config.sources {
+        let (logger, mut source_handles) = match source.source_type {
+            SourceType::Shelly => {
+                create_shelly_logger(source.targets)
+            }
+            SourceType::Sensor => {
+                create_sensor_logger(source.targets)
+            }
+            SourceType::OpenDTU => {
+                create_opendtu_logger(source.targets)
+            }
+        };
+        handler_map.insert(source.prefix, logger);
+        handles.append(&mut source_handles);
+    }
 
     let host = env::args()
         .nth(1)
@@ -73,18 +86,6 @@ fn main() {
         println!("Error creating the client: {:?}", e);
         process::exit(1);
     });
-
-    let (shelly_logger, iot_influx_writer_handle) = create_shelly_logger();
-
-    let (sensor_logger, sensors_influx_writer_handle, sensors_postgres_writer_handle) = create_sensor_logger(db_config);
-
-    let (opendtu_logger, solar_influx_writer_handle) = create_opendtu_logger();
-
-    let handlers: [(String, Arc<Mutex<dyn CheckMessage>>); 3] = [
-        ("shellies".to_string(), Arc::new(Mutex::new(shelly_logger))),
-        ("sensors".to_string(), Arc::new(Mutex::new(sensor_logger))),
-        ("solar".to_string(), Arc::new(Mutex::new(opendtu_logger))),
-    ];
 
     if let Err(err) = block_on(async {
         // Get message stream before connecting.
@@ -112,17 +113,13 @@ fn main() {
 
         while let Some(msg_opt) = strm.next().await {
             if let Some(msg) = msg_opt {
-                let mut found = false;
-                for (prefix, call) in &handlers {
-                    let string = format!("{}/", prefix);
-                    if msg.topic().starts_with(&string) {
-                        found = true;
-                        call.lock().unwrap().check_message(&msg);
-                        break;
-                    }
-                }
-                if !found {
-                    println!("{} {:?}", msg.topic(), msg.payload_str());
+                let prefix = msg.topic().split("/").next().unwrap();
+
+                let handler = handler_map.get(prefix);
+                if let Some(handler) = handler {
+                    handler.lock().unwrap().check_message(&msg);
+                } else {
+                    println!("unhandled prefix {} from topic {}", prefix, msg.topic());
                 }
             } else {
                 // A "None" means we were disconnected. Try to reconnect...
@@ -135,10 +132,9 @@ fn main() {
             }
         }
 
-        iot_influx_writer_handle.join().expect("failed to join influx writer thread");
-        sensors_influx_writer_handle.join().expect("failed to join influx writer thread");
-        sensors_postgres_writer_handle.join().expect("failed to join influx writer thread");
-        solar_influx_writer_handle.join().expect("failed to join influx writer thread");
+        for handle in handles {
+            handle.join().expect("failed to join influx writer thread");
+        }
 
         // Explicit return type for the async block
         Ok::<(), mqtt::Error>(())
@@ -147,7 +143,7 @@ fn main() {
     }
 }
 
-fn create_shelly_logger() -> (ShellyLogger, JoinHandle<()>) {
+fn create_shelly_logger(_vec: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage>>, Vec::<JoinHandle<()>>) {
     let (tx, rx) = sync_channel(100);
 
     let influx_writer_handle = thread::spawn(move || {
@@ -159,46 +155,65 @@ fn create_shelly_logger() -> (ShellyLogger, JoinHandle<()>) {
 
     let logger = ShellyLogger::new(tx);
 
-    (logger, influx_writer_handle)
+    (Arc::new(Mutex::new(logger)), vec![influx_writer_handle])
 }
 
-fn create_sensor_logger(db_config: Config) -> (SensorLogger, JoinHandle<()>, JoinHandle<()>) {
-    let (tx, rx) = sync_channel(100);
+fn create_sensor_logger(targets: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage>>, Vec::<JoinHandle<()>>) {
+    let mut txs: Vec<SyncSender<SensorReading>> = Vec::new();
+    let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
-    let influx_writer_handle = thread::spawn(move || {
-        println!("starting influx writer");
-        let database = "klima";
+    for target in targets {
+        let (tx, handle) = match target {
+            Target::InfluxDB { .. } => {
+                let (tx, rx) = sync_channel(100);
 
-        fn mapper(result: SensorReading) -> WriteQuery {
-            let timestamp = Timestamp::Seconds(result.time.timestamp() as u128);
-            let write_query = WriteQuery::new(timestamp, "data")
-                .add_tag("type", result.measurement.to_string())
-                .add_tag("location", result.location.to_string())
-                .add_tag("sensor", result.sensor.to_string())
-                .add_tag("calculated", result.calculated)
-                .add_field("value", result.value);
-            if result.unit != "" {
-                write_query.add_tag("unit", result.unit.to_string())
-            } else {
-                write_query
+                (tx, thread::spawn(move || {
+                    println!("starting influx writer");
+                    let database = "klima";
+
+                    fn mapper(result: SensorReading) -> WriteQuery {
+                        let timestamp = Timestamp::Seconds(result.time.timestamp() as u128);
+                        let write_query = WriteQuery::new(timestamp, "data")
+                            .add_tag("type", result.measurement.to_string())
+                            .add_tag("location", result.location.to_string())
+                            .add_tag("sensor", result.sensor.to_string())
+                            .add_tag("calculated", result.calculated)
+                            .add_field("value", result.value);
+                        if result.unit != "" {
+                            write_query.add_tag("unit", result.unit.to_string())
+                        } else {
+                            write_query
+                        }
+                    }
+
+                    start_influx_writer(rx, database, mapper);
+                }))
             }
-        }
+            Target::Postgresql { host, port, user, password, database } => {
+                let (tx, rx) = sync_channel(100);
 
-        start_influx_writer(rx, database, mapper);
-    });
+                let mut db_config = postgres::Config::new();
+                let _ = db_config
+                    .host(&host)
+                    .port(port)
+                    .user(&user)
+                    .password(password)
+                    .dbname(&database);
 
-    let (ts_tx, ts_rx) = sync_channel(100);
+                (tx, thread::spawn(move || {
+                    println!("starting postgres writer");
+                    start_postgres_writer(rx, db_config);
+                }))
+            }
+        };
+        txs.push(tx);
+        handles.push(handle);
+    }
 
-    let postgres_writer_handle = thread::spawn(move || {
-        println!("starting postgres writer");
-        start_postgres_writer(ts_rx, db_config);
-    });
-
-    let logger = SensorLogger::new(vec![tx, ts_tx]);
-    (logger, influx_writer_handle, postgres_writer_handle)
+    (Arc::new(Mutex::new(SensorLogger::new(txs))), handles)
 }
 
-fn create_opendtu_logger() -> (OpenDTULogger, JoinHandle<()>) {
+fn create_opendtu_logger(_vec: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage>>, Vec::<JoinHandle<()>>) {
     let (tx, rx) = sync_channel(100);
 
     let influx_writer_handle = thread::spawn(move || {
@@ -208,7 +223,7 @@ fn create_opendtu_logger() -> (OpenDTULogger, JoinHandle<()>) {
 
     let logger = OpenDTULogger::new(tx);
 
-    (logger, influx_writer_handle)
+    (Arc::new(Mutex::new(logger)), vec![influx_writer_handle])
 }
 
 fn start_influx_writer<T>(iot_rx: Receiver<T>, database: &str, query_mapper: fn(T) -> WriteQuery) {

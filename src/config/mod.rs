@@ -14,19 +14,21 @@ pub enum SourceType {
 pub struct Source {
     name: String,
     #[serde(rename = "type")]
-    source_type: SourceType,
-    prefix: String,
-    targets: Vec<Target>,
+    pub(crate) source_type: SourceType,
+    pub(crate) prefix: String,
+    pub(crate) targets: Vec<Target>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type")]
 pub enum Target {
+   #[serde(rename = "influxdb")]
     InfluxDB {
         host: String,
         port: u16,
         database: String,
     },
+    #[serde(rename = "postgresql")]
     Postgresql {
         host: String,
         port: u16,
@@ -36,6 +38,11 @@ pub enum Target {
     },
 }
 
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub struct Config {
+    pub(crate) sources: Vec<Source>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -43,7 +50,7 @@ mod tests {
     #[test]
     fn test_deserialize_influxdb() -> Result<(), &'static str> {
         let yaml = r#"
-        type: "InfluxDB"
+        type: "influxdb"
         host: "foo"
         port: 8086
         database: "bar"
@@ -65,7 +72,7 @@ mod tests {
     #[test]
     fn test_deserialize_postgresql() -> Result<(), &'static str> {
         let yaml = r#"
-        type: "Postgresql"
+        type: "postgresql"
         host: "foo"
         port: 5432
         database: "bar"
@@ -96,7 +103,7 @@ mod tests {
         type: "sensor"
         prefix: "bar"
         targets:
-          - type: "InfluxDB"
+          - type: "influxdb"
             host: "baz"
             port: 8080
             database: "qux"
