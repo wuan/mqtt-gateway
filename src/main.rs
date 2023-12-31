@@ -134,10 +134,6 @@ fn main() {
     }
 }
 
-fn blabla(p0: String) {
-    todo!()
-}
-
 fn create_shelly_logger(_vec: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage>>, Vec::<JoinHandle<()>>) {
     let (tx, rx) = sync_channel(100);
 
