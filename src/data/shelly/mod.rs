@@ -34,7 +34,7 @@ impl Timestamped for SwitchData {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CoverData {
     #[serde(rename = "current_pos")]
-    pub(crate) position: i32,
+    pub(crate) position: Option<i32>,
     #[serde(rename = "apower")]
     pub(crate) power: f32,
     pub(crate) voltage: f32,
@@ -92,22 +92,22 @@ pub fn parse<'a, T: Deserialize<'a> + Clone>(msg: &'a Message) -> Result<Option<
     Ok(Some(data.clone()))
 }
 
-const SWITCH_FIELDS: &[(&str, fn(data: &SwitchData) -> WriteType, &str)] = &[
-    ("output", |data: &SwitchData| WriteType::Int(data.output as i32), "bool"),
-    ("power", |data: &SwitchData| WriteType::Float(data.power), "W"),
-    ("current", |data: &SwitchData| WriteType::Float(data.current), "A"),
-    ("voltage", |data: &SwitchData| WriteType::Float(data.voltage), "V"),
-    ("total_energy", |data: &SwitchData| WriteType::Float(data.energy.total), "Wh"),
-    ("temperature", |data: &SwitchData| WriteType::Float(data.temperature.t_celsius), "°C"),
+const SWITCH_FIELDS: &[(&str, fn(data: &SwitchData) -> Option<WriteType>, &str)] = &[
+    ("output", |data: &SwitchData| Some(WriteType::Int(data.output as i32)), "bool"),
+    ("power", |data: &SwitchData| Some(WriteType::Float(data.power)), "W"),
+    ("current", |data: &SwitchData| Some(WriteType::Float(data.current)), "A"),
+    ("voltage", |data: &SwitchData| Some(WriteType::Float(data.voltage)), "V"),
+    ("total_energy", |data: &SwitchData| Some(WriteType::Float(data.energy.total)), "Wh"),
+    ("temperature", |data: &SwitchData| Some(WriteType::Float(data.temperature.t_celsius)), "°C"),
 ];
 
-const COVER_FIELDS: &[(&str, fn(data: &CoverData) -> WriteType, &str)] = &[
-    ("position", |data: &CoverData| WriteType::Int(data.position), "%"),
-    ("power", |data: &CoverData| WriteType::Float(data.power), "W"),
-    ("current", |data: &CoverData| WriteType::Float(data.current), "A"),
-    ("voltage", |data: &CoverData| WriteType::Float(data.voltage), "V"),
-    ("total_energy", |data: &CoverData| WriteType::Float(data.energy.total), "Wh"),
-    ("temperature", |data: &CoverData| WriteType::Float(data.temperature.t_celsius), "°C"),
+const COVER_FIELDS: &[(&str, fn(data: &CoverData) -> Option<WriteType>, &str)] = &[
+    ("position", |data: &CoverData| if let Some(position) = data.position { Some(WriteType::Int(position)) } else { None }, "%"),
+    ("power", |data: &CoverData| Some(WriteType::Float(data.power)), "W"),
+    ("current", |data: &CoverData| Some(WriteType::Float(data.current)), "A"),
+    ("voltage", |data: &CoverData| Some(WriteType::Float(data.voltage)), "V"),
+    ("total_energy", |data: &CoverData| Some(WriteType::Float(data.energy.total)), "Wh"),
+    ("temperature", |data: &CoverData| Some(WriteType::Float(data.temperature.t_celsius)), "°C"),
 ];
 
 impl CheckMessage for ShellyLogger {
@@ -121,7 +121,7 @@ impl CheckMessage for ShellyLogger {
     }
 }
 
-fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(msg: &'a Message, tx: &SyncSender<WriteQuery>, fields: &[(&str, fn(&T) -> WriteType, &str)]) {
+fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(msg: &'a Message, tx: &SyncSender<WriteQuery>, fields: &[(&str, fn(&T) -> Option<WriteType>, &str)]) {
     let location = msg.topic().split("/").nth(1).unwrap();
     let result: Option<T> = shelly::parse(&msg).unwrap();
     if let Some(data) = result {
@@ -133,12 +133,13 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(msg: &'a
                 let query = WriteQuery::new(timestamp, *measurement);
                 let result = value(&data);
                 let query = match result {
-                    WriteType::Int(i) => {
+                    Some(WriteType::Int(i)) => {
                         query.add_field("value", i)
                     }
-                    WriteType::Float(f) => {
+                    Some(WriteType::Float(f)) => {
                         query.add_field("value", f)
                     }
+                    None => {query}
                 };
 
                 let query = query.add_tag("location", location)
@@ -179,7 +180,7 @@ mod tests {
         let message = Message::new("shellies/bedroom-curtain/status/cover:0", "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\"apower\":0.0,\"voltage\":231.7,\"current\":0.500,\"pf\":0.00,\"freq\":50.0,\"aenergy\":{\"total\":3.143,\"by_minute\":[0.000,0.000,97.712],\"minute_ts\":1703414519},\"temperature\":{\"tC\":30.7, \"tF\":87.3},\"pos_control\":true,\"last_direction\":\"open\",\"current_pos\":100}", QOS_1);
         let result: CoverData = parse(&message)?.unwrap();
 
-        assert_eq!(result.position, 100);
+        assert_eq!(result.position, Some(100));
         assert_eq!(result.power, 0.0);
         assert_eq!(result.voltage, 231.7);
         assert_eq!(result.current, 0.5);
@@ -195,13 +196,17 @@ mod tests {
         let message = Message::new("shellies/bedroom-curtain/status/cover:0", "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\"apower\":0.0,\"voltage\":231.7,\"current\":0.500,\"pf\":0.00,\"freq\":50.0,\"aenergy\":{\"total\":3.143,\"by_minute\":[0.000,0.000,97.712]},\"temperature\":{\"tC\":30.7, \"tF\":87.3},\"pos_control\":true,\"last_direction\":\"open\",\"current_pos\":100}", QOS_1);
         let result: CoverData = parse(&message)?.unwrap();
 
-        assert_eq!(result.position, 100);
-        assert_eq!(result.power, 0.0);
-        assert_eq!(result.voltage, 231.7);
-        assert_eq!(result.current, 0.5);
-        assert_eq!(result.energy.total, 3.143);
-        assert_eq!(result.temperature.t_celsius, 30.7);
         assert!(result.energy.minute_ts.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_cover_status_without_position() -> Result<(), &'static str> {
+        let message = Message::new("shellies/bedroom-curtain/status/cover:0", "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\"apower\":0.0,\"voltage\":231.7,\"current\":0.500,\"pf\":0.00,\"freq\":50.0,\"aenergy\":{\"total\":3.143,\"by_minute\":[0.000,0.000,97.712],\"minute_ts\":1703414519},\"temperature\":{\"tC\":30.7, \"tF\":87.3},\"pos_control\":true,\"last_direction\":\"open\"}", QOS_1);
+        let result: CoverData = parse(&message)?.unwrap();
+
+        assert!(result.position.is_none());
 
         Ok(())
     }
