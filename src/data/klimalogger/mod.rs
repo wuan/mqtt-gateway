@@ -54,7 +54,7 @@ impl CheckMessage for SensorLogger {
                 let difference = now - date_time;
 
                 if difference.num_seconds() > 10 {
-                    println!("high time offset for {}: {}", location, difference);
+                    println!("*** high time offset for {}: {:.2} s", location, difference.num_milliseconds() as f32 / 1000.0);
                 }
 
                 let sensor_reading = SensorReading {
