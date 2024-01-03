@@ -49,6 +49,14 @@ impl CheckMessage for SensorLogger {
                 let naive_date_time = chrono::NaiveDateTime::from_timestamp_opt(result.timestamp as i64, 0).expect("failed to convert timestamp");
                 let date_time = DateTime::<Utc>::from_naive_utc_and_offset(naive_date_time, Utc);
 
+                let now = chrono::offset::Utc::now();
+
+                let difference = now - date_time;
+
+                if difference.num_seconds() > 10 {
+                    println!("high time offset for {}: {}", location, difference);
+                }
+
                 let sensor_reading = SensorReading {
                     measurement: measurement.to_string(),
                     time: date_time,
