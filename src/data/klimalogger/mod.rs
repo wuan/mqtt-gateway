@@ -25,12 +25,12 @@ impl fmt::Debug for Data {
 }
 
 pub struct SensorLogger {
-    tx: Vec::<SyncSender<SensorReading>>,
+    txs: Vec::<SyncSender<SensorReading>>,
 }
 
 impl SensorLogger {
     pub(crate) fn new(tx: Vec::<SyncSender<SensorReading>>) -> Self {
-        SensorLogger { tx }
+        SensorLogger { txs: tx }
     }
 }
 
@@ -59,7 +59,7 @@ impl CheckMessage for SensorLogger {
                     calculated: result.calculated,
                 };
 
-                for tx in &self.tx {
+                for tx in &self.txs {
                     tx.send(sensor_reading.clone()).expect("failed to send");
                 }
             }
