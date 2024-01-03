@@ -44,18 +44,15 @@ impl CheckMessage for SensorLogger {
         if let (Some(location), Some(measurement), Ok(result)) = (
             location, measurement, result.clone()) {
             if let Some(result) = result {
-                println!("Sensor {} \"{}\": {:?}", location, measurement, &result);
-
                 let naive_date_time = chrono::NaiveDateTime::from_timestamp_opt(result.timestamp as i64, 0).expect("failed to convert timestamp");
                 let date_time = DateTime::<Utc>::from_naive_utc_and_offset(naive_date_time, Utc);
 
                 let now = chrono::offset::Utc::now();
-
                 let difference = now - date_time;
 
-                if difference.num_seconds() > 10 {
-                    println!("*** high time offset for {}: {:.2} s", location, difference.num_milliseconds() as f32 / 1000.0);
-                }
+                println!("Sensor {} \"{}\": {:?} {:.2}s{}", location, measurement, &result,
+                         difference.num_milliseconds() as f32 / 1000.0,
+                         if difference.num_seconds() > 10 { " *** HIGH TIME OFFSET ***" } else { "" });
 
                 let sensor_reading = SensorReading {
                     measurement: measurement.to_string(),
