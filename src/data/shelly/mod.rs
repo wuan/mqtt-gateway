@@ -38,7 +38,7 @@ pub struct CoverData {
     #[serde(rename = "apower")]
     pub(crate) power: f32,
     pub(crate) voltage: f32,
-    pub(crate) current: f32,
+    pub(crate) current: Option<f32>,
     #[serde(rename = "aenergy")]
     pub(crate) energy: EnergyData,
     pub(crate) temperature: TemperatureData,
@@ -102,9 +102,9 @@ const SWITCH_FIELDS: &[(&str, fn(data: &SwitchData) -> Option<WriteType>, &str)]
 ];
 
 const COVER_FIELDS: &[(&str, fn(data: &CoverData) -> Option<WriteType>, &str)] = &[
-    ("position", |data: &CoverData| if let Some(position) = data.position { Some(WriteType::Int(position)) } else { None }, "%"),
+    ("position", |data: &CoverData| data.position.map(|value| WriteType::Int(value)), "%"),
     ("power", |data: &CoverData| Some(WriteType::Float(data.power)), "W"),
-    ("current", |data: &CoverData| Some(WriteType::Float(data.current)), "A"),
+    ("current", |data: &CoverData| data.current.map(|value| WriteType::Float(value)), "A"),
     ("voltage", |data: &CoverData| Some(WriteType::Float(data.voltage)), "V"),
     ("total_energy", |data: &CoverData| Some(WriteType::Float(data.energy.total)), "Wh"),
     ("temperature", |data: &CoverData| Some(WriteType::Float(data.temperature.t_celsius)), "°C"),
@@ -131,22 +131,22 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(msg: &'a
             let timestamp = Timestamp::Seconds(minute_ts as u128);
             for (measurement, value, unit) in fields {
                 let query = WriteQuery::new(timestamp, *measurement);
-                let result = value(&data);
-                let query = match result {
-                    Some(WriteType::Int(i)) => {
-                        query.add_field("value", i)
-                    }
-                    Some(WriteType::Float(f)) => {
-                        query.add_field("value", f)
-                    }
-                    None => {query}
-                };
+                if let Some(result) = value(&data) {
+                    let query = match result {
+                        WriteType::Int(i) => {
+                            query.add_field("value", i)
+                        }
+                        WriteType::Float(f) => {
+                            query.add_field("value", f)
+                        }
+                    };
 
-                let query = query.add_tag("location", location)
-                    .add_tag("sensor", "shelly")
-                    .add_tag("type", "switch")
-                    .add_tag("unit", unit);
-                tx.send(query).expect("failed to send");
+                    let query = query.add_tag("location", location)
+                        .add_tag("sensor", "shelly")
+                        .add_tag("type", "switch")
+                        .add_tag("unit", unit);
+                    tx.send(query).expect("failed to send");
+                }
             }
         } else {
             println!("{} no timestamp {:?}", msg.topic(), msg.payload_str());
@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(result.position, Some(100));
         assert_eq!(result.power, 0.0);
         assert_eq!(result.voltage, 231.7);
-        assert_eq!(result.current, 0.5);
+        assert_eq!(result.current, Some(0.5));
         assert_eq!(result.energy.total, 3.143);
         assert_eq!(result.temperature.t_celsius, 30.7);
         assert_eq!(result.energy.minute_ts.unwrap(), 1703414519);
