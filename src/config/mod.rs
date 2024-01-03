@@ -22,11 +22,12 @@ pub struct Source {
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type")]
 pub enum Target {
-   #[serde(rename = "influxdb")]
+    #[serde(rename = "influxdb")]
     InfluxDB {
-        host: String,
-        port: u16,
+        url: String,
         database: String,
+        user: Option<String>,
+        password: Option<String>,
     },
     #[serde(rename = "postgresql")]
     Postgresql {

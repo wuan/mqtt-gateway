@@ -134,19 +134,43 @@ fn main() {
     }
 }
 
-fn create_shelly_logger(_vec: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage>>, Vec::<JoinHandle<()>>) {
-    let (tx, rx) = sync_channel(100);
+fn create_shelly_logger(targets: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage>>, Vec::<JoinHandle<()>>) {
+    let mut txs: Vec<SyncSender<WriteQuery>> = Vec::new();
+    let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
-    let influx_writer_handle = thread::spawn(move || {
-        println!("starting influx writer");
-        let database = "iot";
+    for target in targets {
+        let (tx, handle) = match target {
+            Target::InfluxDB { url, database, user, password } => {
+                spawn_influxdb_writer(InfluxConfig::new(url, database, user, password), std::convert::identity)
+            }
+            Target::Postgresql { .. } => {
+                panic!("Postgresql not supported for shelly");
+            }
+        };
+        txs.push(tx);
+        handles.push(handle);
+    }
 
-        start_influx_writer(rx, database, std::convert::identity);
-    });
 
-    let logger = ShellyLogger::new(tx);
+    (Arc::new(Mutex::new(ShellyLogger::new(txs))), handles)
+}
 
-    (Arc::new(Mutex::new(logger)), vec![influx_writer_handle])
+struct InfluxConfig {
+    url: String,
+    database: String,
+    user: Option<String>,
+    password: Option<String>,
+}
+
+impl InfluxConfig {
+    fn new(url: String, database: String, user: Option<String>, password: Option<String>) -> Self {
+        Self {
+            url,
+            database,
+            user,
+            password,
+        }
+    }
 }
 
 fn create_sensor_logger(targets: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage>>, Vec::<JoinHandle<()>>) {
@@ -155,30 +179,23 @@ fn create_sensor_logger(targets: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage
 
     for target in targets {
         let (tx, handle) = match target {
-            Target::InfluxDB { .. } => {
-                let (tx, rx) = sync_channel(100);
-
-                (tx, thread::spawn(move || {
-                    println!("starting influx writer");
-                    let database = "klima";
-
-                    fn mapper(result: SensorReading) -> WriteQuery {
-                        let timestamp = Timestamp::Seconds(result.time.timestamp() as u128);
-                        let write_query = WriteQuery::new(timestamp, "data")
-                            .add_tag("type", result.measurement.to_string())
-                            .add_tag("location", result.location.to_string())
-                            .add_tag("sensor", result.sensor.to_string())
-                            .add_tag("calculated", result.calculated)
-                            .add_field("value", result.value);
-                        if result.unit != "" {
-                            write_query.add_tag("unit", result.unit.to_string())
-                        } else {
-                            write_query
-                        }
+            Target::InfluxDB { url, database, user, password } => {
+                fn mapper(result: SensorReading) -> WriteQuery {
+                    let timestamp = Timestamp::Seconds(result.time.timestamp() as u128);
+                    let write_query = WriteQuery::new(timestamp, "data")
+                        .add_tag("type", result.measurement.to_string())
+                        .add_tag("location", result.location.to_string())
+                        .add_tag("sensor", result.sensor.to_string())
+                        .add_tag("calculated", result.calculated)
+                        .add_field("value", result.value);
+                    if result.unit != "" {
+                        write_query.add_tag("unit", result.unit.to_string())
+                    } else {
+                        write_query
                     }
+                }
 
-                    start_influx_writer(rx, database, mapper);
-                }))
+                spawn_influxdb_writer(InfluxConfig::new(url, database, user, password), mapper)
             }
             Target::Postgresql { host, port, user, password, database } => {
                 let (tx, rx) = sync_channel(100);
@@ -204,26 +221,54 @@ fn create_sensor_logger(targets: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage
     (Arc::new(Mutex::new(SensorLogger::new(txs))), handles)
 }
 
-fn create_opendtu_logger(_vec: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage>>, Vec::<JoinHandle<()>>) {
-    let (tx, rx) = sync_channel(100);
+fn create_opendtu_logger(targets: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage>>, Vec::<JoinHandle<()>>) {
+    let mut txs: Vec<SyncSender<WriteQuery>> = Vec::new();
+    let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
-    let influx_writer_handle = thread::spawn(move || {
-        println!("starting OpenDTU influx writer");
-        start_influx_writer(rx, "solar", std::convert::identity);
-    });
+    for target in targets {
+        let (tx, handle) = match target {
+            Target::InfluxDB { url, database, user, password } => {
+                spawn_influxdb_writer(InfluxConfig::new(url, database, user, password), std::convert::identity)
+            }
+            Target::Postgresql { .. } => {
+                panic!("Postgresql not supported for opendtu");
+            }
+        };
+        txs.push(tx);
+        handles.push(handle);
+    }
 
-    let logger = OpenDTULogger::new(tx);
+    let logger = OpenDTULogger::new(txs);
 
-    (Arc::new(Mutex::new(logger)), vec![influx_writer_handle])
+    (Arc::new(Mutex::new(logger)), handles)
 }
 
-fn start_influx_writer<T>(iot_rx: Receiver<T>, database: &str, query_mapper: fn(T) -> WriteQuery) {
-    let influx_client = Client::new("http://influx:8086", database);
+fn spawn_influxdb_writer<T: Send + 'static>(config: InfluxConfig, mapper: fn(T) -> WriteQuery) -> (SyncSender<T>, JoinHandle<()>) {
+    let (tx, rx) = sync_channel(100);
+
+    (tx, thread::spawn(move || {
+        println!("starting influx writer {} {}", &config.url, &config.database);
+
+        influxdb_writer(rx, config, mapper);
+    }))
+}
+
+fn influxdb_writer<T>(rx: Receiver<T>, influx_config: InfluxConfig, query_mapper: fn(T) -> WriteQuery) {
+    let influx_url = influx_config.url.clone();
+    let influx_database = influx_config.database.clone();
+
+    let mut influx_client = Client::new(influx_config.url, influx_config.database);
+    influx_client = if let (Some(user), Some(password)) = (influx_config.user, influx_config.password) {
+        influx_client.with_auth(user, password)
+    } else {
+        influx_client
+    };
+
     block_on(async move {
-        println!("starting influx writer async");
+        println!("starting influx writer async {} {}", &influx_url, &influx_database);
 
         loop {
-            let result = iot_rx.recv();
+            let result = rx.recv();
             let data = match result {
                 Ok(query) => { query }
                 Err(error) => {
@@ -232,7 +277,13 @@ fn start_influx_writer<T>(iot_rx: Receiver<T>, database: &str, query_mapper: fn(
                 }
             };
             let query = query_mapper(data);
-            let _ = influx_client.query(query).await.expect("failed to write to influx");
+            let result = influx_client.query(query).await;
+            match result {
+                Ok(_) => {}
+                Err(error) => {
+                    panic!("#### Error writing to influx: {} {}: {:?}", &influx_url, &influx_database, error);
+                }
+            }
         }
         println!("exiting influx writer async");
     });

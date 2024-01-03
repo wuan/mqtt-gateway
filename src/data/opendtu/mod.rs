@@ -16,13 +16,13 @@ struct Data {
 }
 
 pub struct OpenDTULogger {
-    tx: SyncSender<WriteQuery>,
+    txs: Vec::<SyncSender<WriteQuery>>,
     parser: OpenDTUParser,
 }
 
 impl OpenDTULogger {
-    pub(crate) fn new(tx: SyncSender<WriteQuery>) -> Self {
-        OpenDTULogger { tx, parser: OpenDTUParser::new() }
+    pub(crate) fn new(txs: Vec::<SyncSender<WriteQuery>>) -> Self {
+        OpenDTULogger { txs, parser: OpenDTUParser::new() }
     }
 }
 
@@ -39,7 +39,9 @@ impl CheckMessage for OpenDTULogger {
             } else {
                 write_query
             };
-            let _ = self.tx.send(write_query);
+            for tx in &self.txs {
+                tx.send(write_query.clone()).expect("failed to send");
+            }
         }
     }
 }

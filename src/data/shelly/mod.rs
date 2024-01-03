@@ -75,12 +75,12 @@ impl fmt::Debug for TemperatureData {
 }
 
 pub struct ShellyLogger {
-    tx: SyncSender<WriteQuery>,
+    txs: Vec::<SyncSender<WriteQuery>>,
 }
 
 impl ShellyLogger {
-    pub(crate) fn new(tx: SyncSender<WriteQuery>) -> Self {
-        ShellyLogger { tx }
+    pub(crate) fn new(txs: Vec::<SyncSender<WriteQuery>>) -> Self {
+        ShellyLogger { txs }
     }
 }
 
@@ -114,14 +114,14 @@ impl CheckMessage for ShellyLogger {
     fn check_message(&mut self, msg: &Message) {
         let topic = msg.topic();
         if topic.ends_with("/status/switch:0") {
-            handle_message(msg, &self.tx, SWITCH_FIELDS);
+            handle_message(msg, &self.txs, SWITCH_FIELDS);
         } else if topic.ends_with("/status/cover:0") {
-            handle_message(msg, &self.tx, COVER_FIELDS);
+            handle_message(msg, &self.txs, COVER_FIELDS);
         }
     }
 }
 
-fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(msg: &'a Message, tx: &SyncSender<WriteQuery>, fields: &[(&str, fn(&T) -> Option<WriteType>, &str)]) {
+fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(msg: &'a Message, txs: &Vec::<SyncSender<WriteQuery>>, fields: &[(&str, fn(&T) -> Option<WriteType>, &str)]) {
     let location = msg.topic().split("/").nth(1).unwrap();
     let result: Option<T> = shelly::parse(&msg).unwrap();
     if let Some(data) = result {
@@ -145,7 +145,10 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(msg: &'a
                         .add_tag("sensor", "shelly")
                         .add_tag("type", "switch")
                         .add_tag("unit", unit);
-                    tx.send(query).expect("failed to send");
+
+                    for tx in txs {
+                        tx.send(query.clone()).expect("failed to send");
+                    }
                 }
             }
         } else {
