@@ -182,8 +182,7 @@ fn create_sensor_logger(targets: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage
             Target::InfluxDB { url, database, user, password } => {
                 fn mapper(result: SensorReading) -> WriteQuery {
                     let timestamp = Timestamp::Seconds(result.time.timestamp() as u128);
-                    let write_query = WriteQuery::new(timestamp, "data")
-                        .add_tag("type", result.measurement.to_string())
+                    let write_query = WriteQuery::new(timestamp, result.measurement.to_string())
                         .add_tag("location", result.location.to_string())
                         .add_tag("sensor", result.sensor.to_string())
                         .add_tag("calculated", result.calculated)
