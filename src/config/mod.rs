@@ -54,16 +54,14 @@ mod tests {
     fn test_deserialize_influxdb() -> Result<(), &'static str> {
         let yaml = r#"
         type: "influxdb"
-        host: "foo"
-        port: 8086
+        url: "foo"
         database: "bar"
         "#;
 
         let result: Target = serde_yaml::from_str(&yaml).unwrap();
 
-        if let Target::InfluxDB { host, port, database } = result {
-            assert_eq!(host, "foo");
-            assert_eq!(port, 8086);
+        if let Target::InfluxDB { url, database, .. } = result {
+            assert_eq!(url, "foo");
             assert_eq!(database, "bar");
         } else {
             panic!("wrong type");
@@ -107,8 +105,7 @@ mod tests {
         prefix: "bar"
         targets:
           - type: "influxdb"
-            host: "baz"
-            port: 8080
+            url: "baz"
             database: "qux"
         "#;
 
@@ -121,9 +118,8 @@ mod tests {
         assert!(result.targets.len() == 1);
         let target = &result.targets[0];
 
-        if let Target::InfluxDB { host, port, database } = target {
-            assert_eq!(host, "baz");
-            assert_eq!(*port, 8080u16);
+        if let Target::InfluxDB { url, database , ..} = target {
+            assert_eq!(url, "baz");
             assert_eq!(database, "qux");
         } else {
             panic!("wrong type");

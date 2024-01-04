@@ -28,8 +28,6 @@ struct SensorReading {
     location: String,
     sensor: String,
     value: f32,
-    unit: String,
-    calculated: bool,
 }
 
 pub enum WriteType {
@@ -182,16 +180,10 @@ fn create_sensor_logger(targets: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage
             Target::InfluxDB { url, database, user, password } => {
                 fn mapper(result: SensorReading) -> WriteQuery {
                     let timestamp = Timestamp::Seconds(result.time.timestamp() as u128);
-                    let write_query = WriteQuery::new(timestamp, result.measurement.to_string())
+                    WriteQuery::new(timestamp, result.measurement.to_string())
                         .add_tag("location", result.location.to_string())
                         .add_tag("sensor", result.sensor.to_string())
-                        .add_tag("calculated", result.calculated)
-                        .add_field("value", result.value);
-                    if result.unit != "" {
-                        write_query.add_tag("unit", result.unit.to_string())
-                    } else {
-                        write_query
-                    }
+                        .add_field("value", result.value)
                 }
 
                 spawn_influxdb_writer(InfluxConfig::new(url, database, user, password), mapper)
@@ -306,10 +298,10 @@ fn start_postgres_writer(rx: Receiver<SensorReading>, config: Config) {
                 }
             };
 
-            let statement = format!("insert into \"{}\" (time, location, sensor, value, unit, calculated) values ($1, $2, $3, $4, $5, $6);", query.measurement);
+            let statement = format!("insert into \"{}\" (time, location, sensor, value) values ($1, $2, $3, $4);", query.measurement);
             let x = client.execute(
                 &statement,
-                &[&query.time, &query.location, &query.sensor, &query.value, &query.unit, &query.calculated],
+                &[&query.time, &query.location, &query.sensor, &query.value],
             );
 
             match x {

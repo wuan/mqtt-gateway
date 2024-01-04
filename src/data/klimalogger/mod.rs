@@ -13,14 +13,12 @@ pub struct Data {
     #[serde(rename = "time")]
     pub(crate) timestamp: i32,
     pub(crate) value: f32,
-    pub(crate) unit: String,
     pub(crate) sensor: String,
-    pub(crate) calculated: bool,
 }
 
 impl fmt::Debug for Data {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} {} (@{}, {}{})", self.value, self.unit, self.timestamp, self.sensor, if self.calculated { ", C" } else { "" })
+        write!(f, "{} (@{}, {})", self.value, self.timestamp, self.sensor)
     }
 }
 
@@ -60,8 +58,6 @@ impl CheckMessage for SensorLogger {
                     location: location.to_string(),
                     sensor: result.sensor.to_string(),
                     value: result.value,
-                    unit: result.unit.to_string(),
-                    calculated: result.calculated,
                 };
 
                 for tx in &self.txs {
