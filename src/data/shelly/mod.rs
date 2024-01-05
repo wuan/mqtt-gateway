@@ -17,7 +17,7 @@ pub trait Timestamped {
 pub struct SwitchData {
     pub(crate) output: bool,
     #[serde(rename = "apower")]
-    pub(crate) power: f32,
+    pub(crate) power: Option<f32>,
     pub(crate) voltage: f32,
     pub(crate) current: Option<f32>,
     #[serde(rename = "aenergy")]
@@ -36,7 +36,7 @@ pub struct CoverData {
     #[serde(rename = "current_pos")]
     pub(crate) position: Option<i32>,
     #[serde(rename = "apower")]
-    pub(crate) power: f32,
+    pub(crate) power: Option<f32>,
     pub(crate) voltage: f32,
     pub(crate) current: Option<f32>,
     #[serde(rename = "aenergy")]
@@ -94,7 +94,7 @@ pub fn parse<'a, T: Deserialize<'a> + Clone>(msg: &'a Message) -> Result<Option<
 
 const SWITCH_FIELDS: &[(&str, fn(data: &SwitchData) -> Option<WriteType>, &str)] = &[
     ("output", |data: &SwitchData| Some(WriteType::Int(data.output as i32)), "bool"),
-    ("power", |data: &SwitchData| Some(WriteType::Float(data.power)), "W"),
+    ("power", |data: &SwitchData| data.power.map(|value| WriteType::Float(value)), "W"),
     ("current", |data: &SwitchData| data.current.map(|value| WriteType::Float(value)), "A"),
     ("voltage", |data: &SwitchData| Some(WriteType::Float(data.voltage)), "V"),
     ("total_energy", |data: &SwitchData| Some(WriteType::Float(data.energy.total)), "Wh"),
@@ -103,7 +103,7 @@ const SWITCH_FIELDS: &[(&str, fn(data: &SwitchData) -> Option<WriteType>, &str)]
 
 const COVER_FIELDS: &[(&str, fn(data: &CoverData) -> Option<WriteType>, &str)] = &[
     ("position", |data: &CoverData| data.position.map(|value| WriteType::Int(value)), "%"),
-    ("power", |data: &CoverData| Some(WriteType::Float(data.power)), "W"),
+    ("power", |data: &CoverData| data.power.map(|value| WriteType::Float(value)), "W"),
     ("current", |data: &CoverData| data.current.map(|value| WriteType::Float(value)), "A"),
     ("voltage", |data: &CoverData| Some(WriteType::Float(data.voltage)), "V"),
     ("total_energy", |data: &CoverData| Some(WriteType::Float(data.energy.total)), "Wh"),
@@ -169,7 +169,7 @@ mod tests {
         let result: SwitchData = parse(&message)?.unwrap();
 
         assert_eq!(result.output, false);
-        assert_eq!(result.power, 0.0);
+        assert_eq!(result.power, Some(0.0));
         assert_eq!(result.voltage, 226.5);
         assert_eq!(result.current, Some(3.1));
         assert_eq!(result.energy.total, 1094.865);
@@ -184,7 +184,7 @@ mod tests {
         let result: CoverData = parse(&message)?.unwrap();
 
         assert_eq!(result.position, Some(100));
-        assert_eq!(result.power, 0.0);
+        assert_eq!(result.power, Some(0.0));
         assert_eq!(result.voltage, 231.7);
         assert_eq!(result.current, Some(0.5));
         assert_eq!(result.energy.total, 3.143);
