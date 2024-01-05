@@ -19,7 +19,7 @@ pub struct SwitchData {
     #[serde(rename = "apower")]
     pub(crate) power: f32,
     pub(crate) voltage: f32,
-    pub(crate) current: f32,
+    pub(crate) current: Option<f32>,
     #[serde(rename = "aenergy")]
     pub(crate) energy: EnergyData,
     pub(crate) temperature: TemperatureData,
@@ -95,7 +95,7 @@ pub fn parse<'a, T: Deserialize<'a> + Clone>(msg: &'a Message) -> Result<Option<
 const SWITCH_FIELDS: &[(&str, fn(data: &SwitchData) -> Option<WriteType>, &str)] = &[
     ("output", |data: &SwitchData| Some(WriteType::Int(data.output as i32)), "bool"),
     ("power", |data: &SwitchData| Some(WriteType::Float(data.power)), "W"),
-    ("current", |data: &SwitchData| Some(WriteType::Float(data.current)), "A"),
+    ("current", |data: &SwitchData| data.current.map(|value| WriteType::Float(value)), "A"),
     ("voltage", |data: &SwitchData| Some(WriteType::Float(data.voltage)), "V"),
     ("total_energy", |data: &SwitchData| Some(WriteType::Float(data.energy.total)), "Wh"),
     ("temperature", |data: &SwitchData| Some(WriteType::Float(data.temperature.t_celsius)), "°C"),
@@ -171,7 +171,7 @@ mod tests {
         assert_eq!(result.output, false);
         assert_eq!(result.power, 0.0);
         assert_eq!(result.voltage, 226.5);
-        assert_eq!(result.current, 3.1);
+        assert_eq!(result.current, Some(3.1));
         assert_eq!(result.energy.total, 1094.865);
         assert_eq!(result.temperature.t_celsius, 36.4);
 
