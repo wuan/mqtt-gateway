@@ -3,7 +3,7 @@
 This is an example for a gateway component which receives MQTT messages from 
 * [OpenDTU](https://github.com/tbnobody/OpenDTU)
 * Shelly (Generic status update)
-* Sensor data ([Klimalogger](https://github.com/wuan/klimalogger))
+* Sensor data ([Klimalogger](https://github.com/wuan/klimalogger), [CircuitPy-Logger](https://github.com/wuan/circuitpy-logger))
 
 and writes the data into InfluxDB / TimescaleDB time series databases.
 
