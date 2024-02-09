@@ -1,9 +1,9 @@
 # mqtt-gateway
 
 This is an example for a gateway component which receives MQTT messages from 
-* OpenDTU
+* [OpenDTU](https://github.com/tbnobody/OpenDTU)
 * Shelly (Generic status update)
-* Sensor data (Klimalooger)
+* Sensor data ([Klimalogger](https://github.com/wuan/klimalogger))
 
 and writes the data into InfluxDB / TimescaleDB time series databases.
 
