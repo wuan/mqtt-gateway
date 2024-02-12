@@ -1,5 +1,5 @@
 use std::fmt;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::sync::mpsc::SyncSender;
 
 use influxdb::{Timestamp, WriteQuery};
@@ -31,7 +31,7 @@ impl Timestamped for SwitchData {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct CoverData {
     #[serde(rename = "current_pos")]
     pub(crate) position: Option<i32>,
@@ -157,11 +157,49 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(msg: &'a
     }
 }
 
+
+struct OptFormat<'a> {
+    first: bool,
+    f: &'a mut fmt::Formatter<'a>,
+}
+
+impl<'a> OptFormat<'a> {
+    fn new(f: &'a mut std::fmt::Formatter<'a>) -> Self {
+        OptFormat { first: true, f }
+    }
+}
+
+impl fmt::Debug for CoverData {
+    fn fmt<'a>(&self, f: &'a mut Formatter<'_>) -> fmt::Result {
+        OptFormat::new(f);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use paho_mqtt::QOS_1;
 
     use super::*;
+
+    #[test]
+    fn test_formatter() {
+        let cover_data = CoverData {
+            position: None,
+            power: None,
+            voltage: None,
+            current: None,
+            energy: EnergyData {
+                total: 3.143,
+                minute_ts: Some(1703414519),
+            },
+            temperature: TemperatureData {
+                t_celsius: 30.7,
+            },
+        };
+        let result = format!("{:?}", cover_data);
+        assert_eq!(result, "3.143 Wh, 30.7 °C");
+    }
 
     #[test]
     fn test_parse_switch_status() -> Result<(), &'static str> {
