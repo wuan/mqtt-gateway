@@ -30,6 +30,11 @@ impl SensorLogger {
     pub(crate) fn new(tx: Vec::<SyncSender<SensorReading>>) -> Self {
         SensorLogger { txs: tx }
     }
+
+    fn convert_timestamp(timestamp: i64) -> DateTime<Utc> {
+        let naive_date_time = chrono::NaiveDateTime::from_timestamp_opt(timestamp, 0).expect("failed to convert timestamp");
+        DateTime::<Utc>::from_naive_utc_and_offset(naive_date_time, Utc)
+    }
 }
 
 impl CheckMessage for SensorLogger {
@@ -42,15 +47,19 @@ impl CheckMessage for SensorLogger {
         if let (Some(location), Some(measurement), Ok(result)) = (
             location, measurement, result.clone()) {
             if let Some(result) = result {
-                let naive_date_time = chrono::NaiveDateTime::from_timestamp_opt(result.timestamp as i64, 0).expect("failed to convert timestamp");
-                let date_time = DateTime::<Utc>::from_naive_utc_and_offset(naive_date_time, Utc);
+                let date_time = Self::convert_timestamp(result.timestamp as i64);
 
                 let now = chrono::offset::Utc::now();
                 let difference = now - date_time;
 
+                let has_high_time_offset = difference.num_seconds() > 10;
                 println!("Sensor {} \"{}\": {:?} {:.2}s{}", location, measurement, &result,
                          difference.num_milliseconds() as f32 / 1000.0,
-                         if difference.num_seconds() > 10 { " *** HIGH TIME OFFSET ***" } else { "" });
+                         if has_high_time_offset { " *** HIGH TIME OFFSET ***" } else { "" });
+
+                if has_high_time_offset {
+                    return;
+                }
 
                 let sensor_reading = SensorReading {
                     measurement: measurement.to_string(),
