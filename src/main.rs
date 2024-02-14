@@ -49,7 +49,6 @@ fn main() {
     let mut topics: Vec<String> = Vec::new();
     let mut qoss: Vec<i32> = Vec::new();
 
-
     for source in config.sources {
         let (logger, mut source_handles) = match source.source_type {
             SourceType::Shelly => {
