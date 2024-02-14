@@ -89,6 +89,8 @@ pub fn parse(msg: &Message) -> Result<Option<Data>, &'static str> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc::sync_channel;
+    use std::thread;
     use paho_mqtt::QOS_1;
 
     use super::*;
@@ -96,7 +98,7 @@ mod tests {
     #[test]
     fn test_parse() -> Result<(), &'static str> {
         let topic = "klimalogger";
-        let payload = "{\"location\": \"Kinderzimmer 1\", \"type\": \"temperature\", \"unit\": \"\u{00b0C}\", \"sensor\": \"BME680\", \"calculated\": false, \"time\": 1701292592, \"value\": 19.45}";
+        let payload = "{\"type\": \"temperature\", \"unit\": \"\u{00b0C}\", \"sensor\": \"BME680\", \"calculated\": false, \"time\": 1701292592, \"value\": 19.45}";
 
         let message = Message::new(topic, payload, QOS_1);
         let data = parse(&message)?.unwrap();
@@ -110,12 +112,55 @@ mod tests {
     #[test]
     fn test_parse_error() -> Result<(), &'static str> {
         let topic = "klimalogger";
-        let payload = "{\"host\": \"dana\", \"location\": \"Kinderzimmer 1\", \"type\": \"temperature\", \"unit\": \"\u{00b0C}\", \"sensor\": \"BME680\", \"calculated\": false, \"time\": \"foo\", \"value\": 19.45}";
+        let payload = "{\"type\": \"temperature\", \"unit\": \"\u{00b0C}\", \"sensor\": \"BME680\", \"calculated\": false, \"time\": \"foo\", \"value\": 19.45}";
 
         let message = Message::new(topic, payload, QOS_1);
         let error = parse(&message).err().unwrap();
 
         assert_eq!(error, "could not deserialize JSON");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_message() -> Result<(), &'static str> {
+        let topic = "klimalogger/location/temperature";
+        let now = chrono::offset::Utc::now();
+        let payload = format!("{{\"location\": \"Kinderzimmer 1\", \"type\": \"temperature\", \"unit\": \"\u{00b0C}\", \"sensor\": \"BME680\", \"calculated\": false, \"time\": {}, \"value\": 19.45}}", now.timestamp());
+
+        let (tx, rx) = sync_channel(100);
+
+        let mut logger = SensorLogger::new(vec![tx]);
+        let message = Message::new(topic, payload, QOS_1);
+        thread::spawn(move || {
+            logger.check_message(&message);
+        });
+
+        let result = rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+
+        assert_eq!(result.location, "location");
+        assert_eq!(result.measurement, "temperature");
+        assert_eq!(result.sensor, "BME680");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_message_handles_outdated_value() -> Result<(), &'static str> {
+        let topic = "klimalogger/location/temperature";
+        let payload = "{{\"location\": \"Kinderzimmer 1\", \"type\": \"temperature\", \"unit\": \"\u{00b0C}\", \"sensor\": \"BME680\", \"calculated\": false, \"time\": 1701292592, \"value\": 19.45}}";
+
+        let (tx, rx) = sync_channel(100);
+
+        let mut logger = SensorLogger::new(vec![tx]);
+        let message = Message::new(topic, payload, QOS_1);
+        thread::spawn(move || {
+            logger.check_message(&message);
+        });
+
+        let result = rx.recv_timeout(std::time::Duration::from_secs(1));
+
+        assert!(result.is_err());
 
         Ok(())
     }
