@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn test_parse() -> Result<(), &'static str> {
         let topic = "klimalogger";
-        let payload = "{\"type\": \"temperature\", \"unit\": \"\u{00b0C}\", \"sensor\": \"BME680\", \"calculated\": false, \"time\": 1701292592, \"value\": 19.45}";
+        let payload = "{\"foo\": \"ignored\", \"sensor\": \"BME680\", \"time\": 1701292592, \"value\": 19.45}";
 
         let message = Message::new(topic, payload, QOS_1);
         let data = parse(&message)?.unwrap();
@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn test_parse_error() -> Result<(), &'static str> {
         let topic = "klimalogger";
-        let payload = "{\"type\": \"temperature\", \"unit\": \"\u{00b0C}\", \"sensor\": \"BME680\", \"calculated\": false, \"time\": \"foo\", \"value\": 19.45}";
+        let payload = "{\"sensor\": \"BME680\", \"time\": \"foo\", \"value\": 19.45}";
 
         let message = Message::new(topic, payload, QOS_1);
         let error = parse(&message).err().unwrap();
@@ -126,7 +126,7 @@ mod tests {
     fn test_check_message() -> Result<(), &'static str> {
         let topic = "klimalogger/location/temperature";
         let now = chrono::offset::Utc::now();
-        let payload = format!("{{\"location\": \"Kinderzimmer 1\", \"type\": \"temperature\", \"unit\": \"\u{00b0C}\", \"sensor\": \"BME680\", \"calculated\": false, \"time\": {}, \"value\": 19.45}}", now.timestamp());
+        let payload = format!("{{\"sensor\": \"BME680\", \"time\": {}, \"value\": 19.45}}", now.timestamp());
 
         let (tx, rx) = sync_channel(100);
 
@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn test_check_message_handles_outdated_value() -> Result<(), &'static str> {
         let topic = "klimalogger/location/temperature";
-        let payload = "{{\"location\": \"Kinderzimmer 1\", \"type\": \"temperature\", \"unit\": \"\u{00b0C}\", \"sensor\": \"BME680\", \"calculated\": false, \"time\": 1701292592, \"value\": 19.45}}";
+        let payload = "{{\"sensor\": \"BME680\", \"time\": 1701292592, \"value\": 19.45}}";
 
         let (tx, rx) = sync_channel(100);
 
