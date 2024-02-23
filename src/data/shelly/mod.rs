@@ -85,12 +85,8 @@ impl ShellyLogger {
     }
 }
 
-pub fn parse<'a, T: Deserialize<'a> + Clone>(msg: &'a Message) -> Result<Option<T>> {
-    let data = serde_json::from_slice::<T>(msg.payload()).map_err(|error| {
-        eprintln!("{:?}", error);
-        "could not deserialize JSON"
-    })?;
-    Ok(Some(data.clone()))
+pub fn parse<'a, T: Deserialize<'a> + Clone>(msg: &'a Message) -> Result<T> {
+    Ok(serde_json::from_slice::<T>(msg.payload())?)
 }
 
 const SWITCH_FIELDS: &[(&str, fn(data: &SwitchData) -> Option<WriteType>, &str)] = &[
@@ -216,7 +212,7 @@ mod tests {
     #[test]
     fn test_parse_switch_status() -> Result<()> {
         let message = Message::new("shellies/loo-fan/status/switch:0", "{\"id\":0, \"source\":\"timer\", \"output\":false, \"apower\":0.0, \"voltage\":226.5, \"current\":3.1, \"aenergy\":{\"total\":1094.865,\"by_minute\":[0.000,0.000,0.000],\"minute_ts\":1703415907},\"temperature\":{\"tC\":36.4, \"tF\":97.5}}", QOS_1);
-        let result: SwitchData = parse(&message)?.unwrap();
+        let result: SwitchData = parse(&message)?;
 
         assert_eq!(result.output, false);
         assert_eq!(result.power, Some(0.0));
@@ -231,7 +227,7 @@ mod tests {
     #[test]
     fn test_parse_cover_status() -> Result<()> {
         let message = Message::new("shellies/bedroom-curtain/status/cover:0", "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\"apower\":0.0,\"voltage\":231.7,\"current\":0.500,\"pf\":0.00,\"freq\":50.0,\"aenergy\":{\"total\":3.143,\"by_minute\":[0.000,0.000,97.712],\"minute_ts\":1703414519},\"temperature\":{\"tC\":30.7, \"tF\":87.3},\"pos_control\":true,\"last_direction\":\"open\",\"current_pos\":100}", QOS_1);
-        let result: CoverData = parse(&message)?.unwrap();
+        let result: CoverData = parse(&message)?;
 
         assert_eq!(result.position, Some(100));
         assert_eq!(result.power, Some(0.0));
@@ -247,7 +243,7 @@ mod tests {
     #[test]
     fn test_parse_cover_status_without_timestamp() -> Result<()> {
         let message = Message::new("shellies/bedroom-curtain/status/cover:0", "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\"apower\":0.0,\"voltage\":231.7,\"current\":0.500,\"pf\":0.00,\"freq\":50.0,\"aenergy\":{\"total\":3.143,\"by_minute\":[0.000,0.000,97.712]},\"temperature\":{\"tC\":30.7, \"tF\":87.3},\"pos_control\":true,\"last_direction\":\"open\",\"current_pos\":100}", QOS_1);
-        let result: CoverData = parse(&message)?.unwrap();
+        let result: CoverData = parse(&message)?;
 
         assert!(result.energy.minute_ts.is_none());
 
@@ -257,7 +253,7 @@ mod tests {
     #[test]
     fn test_parse_cover_status_without_position() -> Result<()> {
         let message = Message::new("shellies/bedroom-curtain/status/cover:0", "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\"apower\":0.0,\"voltage\":231.7,\"current\":0.500,\"pf\":0.00,\"freq\":50.0,\"aenergy\":{\"total\":3.143,\"by_minute\":[0.000,0.000,97.712],\"minute_ts\":1703414519},\"temperature\":{\"tC\":30.7, \"tF\":87.3},\"pos_control\":true,\"last_direction\":\"open\"}", QOS_1);
-        let result: CoverData = parse(&message)?.unwrap();
+        let result: CoverData = parse(&message)?;
 
         assert!(result.position.is_none());
 
