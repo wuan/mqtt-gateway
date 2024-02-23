@@ -46,57 +46,49 @@ impl CheckMessage for SensorLogger {
         let location = split.nth(1);
         let measurement = split.next();
         let result = parse(&msg);
-        if let (Some(location), Some(measurement), Ok(result)) =
-            (location, measurement, result.clone())
-        {
-            if let Some(result) = result {
-                let date_time = Self::convert_timestamp(result.timestamp as i64);
+        if let (Some(location), Some(measurement), Ok(result)) = (location, measurement, &result) {
+            let date_time = Self::convert_timestamp(result.timestamp as i64);
 
-                let now = chrono::offset::Utc::now();
-                let difference = now - date_time;
+            let now = chrono::offset::Utc::now();
+            let difference = now - date_time;
 
-                let has_high_time_offset = difference.num_seconds() > 10;
-                println!(
-                    "Sensor {} \"{}\": {:?} {:.2}s{}",
-                    location,
-                    measurement,
-                    &result,
-                    difference.num_milliseconds() as f32 / 1000.0,
-                    if has_high_time_offset {
-                        " *** HIGH TIME OFFSET ***"
-                    } else {
-                        ""
-                    }
-                );
-
+            let has_high_time_offset = difference.num_seconds() > 10;
+            println!(
+                "Sensor {} \"{}\": {:?} {:.2}s{}",
+                location,
+                measurement,
+                &result,
+                difference.num_milliseconds() as f32 / 1000.0,
                 if has_high_time_offset {
-                    return;
+                    " *** HIGH TIME OFFSET ***"
+                } else {
+                    ""
                 }
+            );
 
-                let sensor_reading = SensorReading {
-                    measurement: measurement.to_string(),
-                    time: date_time,
-                    location: location.to_string(),
-                    sensor: result.sensor.to_string(),
-                    value: result.value,
-                };
+            if has_high_time_offset {
+                return;
+            }
 
-                for tx in &self.txs {
-                    tx.send(sensor_reading.clone()).expect("failed to send");
-                }
+            let sensor_reading = SensorReading {
+                measurement: measurement.to_string(),
+                time: date_time,
+                location: location.to_string(),
+                sensor: result.sensor.to_string(),
+                value: result.value,
+            };
+
+            for tx in &self.txs {
+                tx.send(sensor_reading.clone()).expect("failed to send");
             }
         } else {
-            println!("FAILED: {:?}, {:?}, {:?}", location, measurement, result);
+            println!("FAILED: {:?}, {:?}, {:?}", location, measurement, &result);
         }
     }
 }
 
-pub fn parse(msg: &Message) -> Result<Option<Data>> {
-    let data = serde_json::from_slice::<Data>(msg.payload()).map_err(|error| {
-        eprintln!("{:?}", error);
-        "could not deserialize JSON"
-    })?;
-    Ok(Some(data.clone()))
+pub fn parse(msg: &Message) -> Result<Data> {
+    Ok(serde_json::from_slice::<Data>(msg.payload())?)
 }
 
 #[cfg(test)]
@@ -114,7 +106,7 @@ mod tests {
         let payload = "{\"foo\": \"ignored\", \"sensor\": \"BME680\", \"time\": 1701292592, \"value\": 19.45}";
 
         let message = Message::new(topic, payload, QOS_1);
-        let data = parse(&message)?.unwrap();
+        let data = parse(&message)?;
 
         assert_eq!(data.timestamp, 1701292592);
         assert_eq!(data.sensor, "BME680");
@@ -130,7 +122,7 @@ mod tests {
         let message = Message::new(topic, payload, QOS_1);
         let error = parse(&message).err().unwrap();
 
-        assert_eq!(error, "could not deserialize JSON");
+        assert_eq!(error.to_string(), "could not deserialize JSON");
 
         Ok(())
     }

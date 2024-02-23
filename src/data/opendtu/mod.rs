@@ -102,11 +102,7 @@ impl OpenDTUParser {
                     }
                     "status" => {
                         if field == "last_update" {
-                            self.timestamp = Some(
-                                msg.payload_str()
-                                    .parse::<i64>()
-                                    .map_err(|_| "could not parse timestamp string to integer")?,
-                            );
+                            self.timestamp = Some(msg.payload_str().parse::<i64>()?);
                         } else {
                             // ignore other status data
                             // println!("  status: {:}: {:?}", field, msg.payload_str());
