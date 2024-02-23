@@ -1,6 +1,7 @@
 use std::fmt;
 use std::sync::mpsc::SyncSender;
 
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use paho_mqtt::Message;
 use serde::{Deserialize, Serialize};
@@ -23,16 +24,17 @@ impl fmt::Debug for Data {
 }
 
 pub struct SensorLogger {
-    txs: Vec::<SyncSender<SensorReading>>,
+    txs: Vec<SyncSender<SensorReading>>,
 }
 
 impl SensorLogger {
-    pub(crate) fn new(tx: Vec::<SyncSender<SensorReading>>) -> Self {
+    pub(crate) fn new(tx: Vec<SyncSender<SensorReading>>) -> Self {
         SensorLogger { txs: tx }
     }
 
     fn convert_timestamp(timestamp: i64) -> DateTime<Utc> {
-        let naive_date_time = chrono::NaiveDateTime::from_timestamp_opt(timestamp, 0).expect("failed to convert timestamp");
+        let naive_date_time = chrono::NaiveDateTime::from_timestamp_opt(timestamp, 0)
+            .expect("failed to convert timestamp");
         DateTime::<Utc>::from_naive_utc_and_offset(naive_date_time, Utc)
     }
 }
@@ -44,8 +46,9 @@ impl CheckMessage for SensorLogger {
         let location = split.nth(1);
         let measurement = split.next();
         let result = parse(&msg);
-        if let (Some(location), Some(measurement), Ok(result)) = (
-            location, measurement, result.clone()) {
+        if let (Some(location), Some(measurement), Ok(result)) =
+            (location, measurement, result.clone())
+        {
             if let Some(result) = result {
                 let date_time = Self::convert_timestamp(result.timestamp as i64);
 
@@ -53,9 +56,18 @@ impl CheckMessage for SensorLogger {
                 let difference = now - date_time;
 
                 let has_high_time_offset = difference.num_seconds() > 10;
-                println!("Sensor {} \"{}\": {:?} {:.2}s{}", location, measurement, &result,
-                         difference.num_milliseconds() as f32 / 1000.0,
-                         if has_high_time_offset { " *** HIGH TIME OFFSET ***" } else { "" });
+                println!(
+                    "Sensor {} \"{}\": {:?} {:.2}s{}",
+                    location,
+                    measurement,
+                    &result,
+                    difference.num_milliseconds() as f32 / 1000.0,
+                    if has_high_time_offset {
+                        " *** HIGH TIME OFFSET ***"
+                    } else {
+                        ""
+                    }
+                );
 
                 if has_high_time_offset {
                     return;
@@ -79,7 +91,7 @@ impl CheckMessage for SensorLogger {
     }
 }
 
-pub fn parse(msg: &Message) -> Result<Option<Data>, &'static str> {
+pub fn parse(msg: &Message) -> Result<Option<Data>> {
     let data = serde_json::from_slice::<Data>(msg.payload()).map_err(|error| {
         eprintln!("{:?}", error);
         "could not deserialize JSON"
@@ -91,12 +103,13 @@ pub fn parse(msg: &Message) -> Result<Option<Data>, &'static str> {
 mod tests {
     use std::sync::mpsc::sync_channel;
     use std::thread;
+
     use paho_mqtt::QOS_1;
 
     use super::*;
 
     #[test]
-    fn test_parse() -> Result<(), &'static str> {
+    fn test_parse() -> Result<()> {
         let topic = "klimalogger";
         let payload = "{\"foo\": \"ignored\", \"sensor\": \"BME680\", \"time\": 1701292592, \"value\": 19.45}";
 
@@ -110,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_error() -> Result<(), &'static str> {
+    fn test_parse_error() -> Result<()> {
         let topic = "klimalogger";
         let payload = "{\"sensor\": \"BME680\", \"time\": \"foo\", \"value\": 19.45}";
 
@@ -123,10 +136,13 @@ mod tests {
     }
 
     #[test]
-    fn test_check_message() -> Result<(), &'static str> {
+    fn test_check_message() -> Result<()> {
         let topic = "klimalogger/location/temperature";
         let now = chrono::offset::Utc::now();
-        let payload = format!("{{\"sensor\": \"BME680\", \"time\": {}, \"value\": 19.45}}", now.timestamp());
+        let payload = format!(
+            "{{\"sensor\": \"BME680\", \"time\": {}, \"value\": 19.45}}",
+            now.timestamp()
+        );
 
         let (tx, rx) = sync_channel(100);
 
@@ -146,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_message_handles_outdated_value() -> Result<(), &'static str> {
+    fn test_check_message_handles_outdated_value() -> Result<()> {
         let topic = "klimalogger/location/temperature";
         let payload = "{{\"sensor\": \"BME680\", \"time\": 1701292592, \"value\": 19.45}}";
 

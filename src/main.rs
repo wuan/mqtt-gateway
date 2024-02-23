@@ -1,9 +1,9 @@
-use std::{fs, process, thread, time::Duration};
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{Receiver, sync_channel, SyncSender};
 use std::thread::JoinHandle;
+use std::{fs, process, thread, time::Duration};
 
 use chrono::{DateTime, Utc};
 use futures::{executor::block_on, stream::StreamExt};
@@ -13,10 +13,10 @@ use paho_mqtt::QOS_1;
 use postgres::{Config, NoTls};
 
 use crate::config::{SourceType, Target};
-use crate::data::CheckMessage;
 use crate::data::klimalogger::SensorLogger;
 use crate::data::opendtu::OpenDTULogger;
 use crate::data::shelly::ShellyLogger;
+use crate::data::CheckMessage;
 
 mod config;
 mod data;
@@ -40,26 +40,21 @@ fn main() {
     env_logger::init();
 
     let config_string = fs::read_to_string("config.yml").expect("failed to read config file");
-    let config: config::Config = serde_yaml::from_str(&config_string).expect("failed to parse config file");
+    let config: config::Config =
+        serde_yaml::from_str(&config_string).expect("failed to parse config file");
 
     println!("config: {:?}", config);
 
-    let mut handler_map: HashMap::<String, Arc<Mutex<dyn CheckMessage>>> = HashMap::new();
+    let mut handler_map: HashMap<String, Arc<Mutex<dyn CheckMessage>>> = HashMap::new();
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
     let mut topics: Vec<String> = Vec::new();
     let mut qoss: Vec<i32> = Vec::new();
 
     for source in config.sources {
         let (logger, mut source_handles) = match source.source_type {
-            SourceType::Shelly => {
-                create_shelly_logger(source.targets)
-            }
-            SourceType::Sensor => {
-                create_sensor_logger(source.targets)
-            }
-            SourceType::OpenDTU => {
-                create_opendtu_logger(source.targets)
-            }
+            SourceType::Shelly => create_shelly_logger(source.targets),
+            SourceType::Sensor => create_sensor_logger(source.targets),
+            SourceType::OpenDTU => create_opendtu_logger(source.targets),
         };
         handler_map.insert(source.prefix.clone(), logger);
         handles.append(&mut source_handles);
@@ -111,7 +106,10 @@ fn main() {
                 }
             } else {
                 // A "None" means we were disconnected. Try to reconnect...
-                println!("Lost connection. Attempting reconnect. {:?}", mqtt_client.is_connected());
+                println!(
+                    "Lost connection. Attempting reconnect. {:?}",
+                    mqtt_client.is_connected()
+                );
                 while let Err(err) = mqtt_client.reconnect().await {
                     println!("Error reconnecting: {}", err);
                     // For tokio use: tokio::time::delay_for()
@@ -131,15 +129,23 @@ fn main() {
     }
 }
 
-fn create_shelly_logger(targets: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage>>, Vec::<JoinHandle<()>>) {
+fn create_shelly_logger(
+    targets: Vec<Target>,
+) -> (Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>) {
     let mut txs: Vec<SyncSender<WriteQuery>> = Vec::new();
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
     for target in targets {
         let (tx, handle) = match target {
-            Target::InfluxDB { url, database, user, password } => {
-                spawn_influxdb_writer(InfluxConfig::new(url, database, user, password), std::convert::identity)
-            }
+            Target::InfluxDB {
+                url,
+                database,
+                user,
+                password,
+            } => spawn_influxdb_writer(
+                InfluxConfig::new(url, database, user, password),
+                std::convert::identity,
+            ),
             Target::Postgresql { .. } => {
                 panic!("Postgresql not supported for shelly");
             }
@@ -147,7 +153,6 @@ fn create_shelly_logger(targets: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage
         txs.push(tx);
         handles.push(handle);
     }
-
 
     (Arc::new(Mutex::new(ShellyLogger::new(txs))), handles)
 }
@@ -170,13 +175,20 @@ impl InfluxConfig {
     }
 }
 
-fn create_sensor_logger(targets: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage>>, Vec::<JoinHandle<()>>) {
+fn create_sensor_logger(
+    targets: Vec<Target>,
+) -> (Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>) {
     let mut txs: Vec<SyncSender<SensorReading>> = Vec::new();
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
     for target in targets {
         let (tx, handle) = match target {
-            Target::InfluxDB { url, database, user, password } => {
+            Target::InfluxDB {
+                url,
+                database,
+                user,
+                password,
+            } => {
                 fn mapper(result: SensorReading) -> WriteQuery {
                     let timestamp = Timestamp::Seconds(result.time.timestamp() as u128);
                     WriteQuery::new(timestamp, result.measurement.to_string())
@@ -187,7 +199,13 @@ fn create_sensor_logger(targets: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage
 
                 spawn_influxdb_writer(InfluxConfig::new(url, database, user, password), mapper)
             }
-            Target::Postgresql { host, port, user, password, database } => {
+            Target::Postgresql {
+                host,
+                port,
+                user,
+                password,
+                database,
+            } => {
                 let (tx, rx) = sync_channel(100);
 
                 let mut db_config = postgres::Config::new();
@@ -198,10 +216,13 @@ fn create_sensor_logger(targets: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage
                     .password(password)
                     .dbname(&database);
 
-                (tx, thread::spawn(move || {
-                    println!("starting postgres writer");
-                    start_postgres_writer(rx, db_config);
-                }))
+                (
+                    tx,
+                    thread::spawn(move || {
+                        println!("starting postgres writer");
+                        start_postgres_writer(rx, db_config);
+                    }),
+                )
             }
         };
         txs.push(tx);
@@ -211,15 +232,23 @@ fn create_sensor_logger(targets: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage
     (Arc::new(Mutex::new(SensorLogger::new(txs))), handles)
 }
 
-fn create_opendtu_logger(targets: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessage>>, Vec::<JoinHandle<()>>) {
+fn create_opendtu_logger(
+    targets: Vec<Target>,
+) -> (Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>) {
     let mut txs: Vec<SyncSender<WriteQuery>> = Vec::new();
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
     for target in targets {
         let (tx, handle) = match target {
-            Target::InfluxDB { url, database, user, password } => {
-                spawn_influxdb_writer(InfluxConfig::new(url, database, user, password), std::convert::identity)
-            }
+            Target::InfluxDB {
+                url,
+                database,
+                user,
+                password,
+            } => spawn_influxdb_writer(
+                InfluxConfig::new(url, database, user, password),
+                std::convert::identity,
+            ),
             Target::Postgresql { .. } => {
                 panic!("Postgresql not supported for opendtu");
             }
@@ -233,34 +262,51 @@ fn create_opendtu_logger(targets: Vec<Target>) -> (Arc::<Mutex::<dyn CheckMessag
     (Arc::new(Mutex::new(logger)), handles)
 }
 
-fn spawn_influxdb_writer<T: Send + 'static>(config: InfluxConfig, mapper: fn(T) -> WriteQuery) -> (SyncSender<T>, JoinHandle<()>) {
+fn spawn_influxdb_writer<T: Send + 'static>(
+    config: InfluxConfig,
+    mapper: fn(T) -> WriteQuery,
+) -> (SyncSender<T>, JoinHandle<()>) {
     let (tx, rx) = sync_channel(100);
 
-    (tx, thread::spawn(move || {
-        println!("starting influx writer {} {}", &config.url, &config.database);
+    (
+        tx,
+        thread::spawn(move || {
+            println!(
+                "starting influx writer {} {}",
+                &config.url, &config.database
+            );
 
-        influxdb_writer(rx, config, mapper);
-    }))
+            influxdb_writer(rx, config, mapper);
+        }),
+    )
 }
 
-fn influxdb_writer<T>(rx: Receiver<T>, influx_config: InfluxConfig, query_mapper: fn(T) -> WriteQuery) {
+fn influxdb_writer<T>(
+    rx: Receiver<T>,
+    influx_config: InfluxConfig,
+    query_mapper: fn(T) -> WriteQuery,
+) {
     let influx_url = influx_config.url.clone();
     let influx_database = influx_config.database.clone();
 
     let mut influx_client = Client::new(influx_config.url, influx_config.database);
-    influx_client = if let (Some(user), Some(password)) = (influx_config.user, influx_config.password) {
-        influx_client.with_auth(user, password)
-    } else {
-        influx_client
-    };
+    influx_client =
+        if let (Some(user), Some(password)) = (influx_config.user, influx_config.password) {
+            influx_client.with_auth(user, password)
+        } else {
+            influx_client
+        };
 
     block_on(async move {
-        println!("starting influx writer async {} {}", &influx_url, &influx_database);
+        println!(
+            "starting influx writer async {} {}",
+            &influx_url, &influx_database
+        );
 
         loop {
             let result = rx.recv();
             let data = match result {
-                Ok(query) => { query }
+                Ok(query) => query,
                 Err(error) => {
                     println!("error receiving query: {:?}", error);
                     break;
@@ -271,7 +317,10 @@ fn influxdb_writer<T>(rx: Receiver<T>, influx_config: InfluxConfig, query_mapper
             match result {
                 Ok(_) => {}
                 Err(error) => {
-                    panic!("#### Error writing to influx: {} {}: {:?}", &influx_url, &influx_database, error);
+                    panic!(
+                        "#### Error writing to influx: {} {}: {:?}",
+                        &influx_url, &influx_database, error
+                    );
                 }
             }
         }
@@ -282,7 +331,9 @@ fn influxdb_writer<T>(rx: Receiver<T>, influx_config: InfluxConfig, query_mapper
 }
 
 fn start_postgres_writer(rx: Receiver<SensorReading>, config: Config) {
-    let mut client = config.connect(NoTls).expect("failed to connect to postgres");
+    let mut client = config
+        .connect(NoTls)
+        .expect("failed to connect to postgres");
 
     block_on(async move {
         println!("starting postgres writer async");
@@ -290,14 +341,17 @@ fn start_postgres_writer(rx: Receiver<SensorReading>, config: Config) {
         loop {
             let result = rx.recv();
             let query = match result {
-                Ok(query) => { query }
+                Ok(query) => query,
                 Err(error) => {
                     println!("error receiving query: {:?}", error);
                     break;
                 }
             };
 
-            let statement = format!("insert into \"{}\" (time, location, sensor, value) values ($1, $2, $3, $4);", query.measurement);
+            let statement = format!(
+                "insert into \"{}\" (time, location, sensor, value) values ($1, $2, $3, $4);",
+                query.measurement
+            );
             let x = client.execute(
                 &statement,
                 &[&query.time, &query.location, &query.sensor, &query.value],
@@ -306,7 +360,10 @@ fn start_postgres_writer(rx: Receiver<SensorReading>, config: Config) {
             match x {
                 Ok(_) => {}
                 Err(error) => {
-                    eprintln!("#### Error writing to postgres: {} {:?}", query.measurement, error);
+                    eprintln!(
+                        "#### Error writing to postgres: {} {:?}",
+                        query.measurement, error
+                    );
                 }
             }
         }
@@ -315,4 +372,3 @@ fn start_postgres_writer(rx: Receiver<SensorReading>, config: Config) {
 
     println!("exiting influx writer");
 }
-
