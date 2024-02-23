@@ -1,9 +1,9 @@
 use paho_mqtt::Message;
 use serde::{Deserialize, Serialize};
 
-pub(crate) mod parse;
-pub(crate) mod opendtu;
 pub(crate) mod klimalogger;
+pub(crate) mod opendtu;
+pub(crate) mod parse;
 pub(crate) mod shelly;
 
 #[derive(Debug, Deserialize, Serialize)]

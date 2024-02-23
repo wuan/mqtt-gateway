@@ -1,3 +1,4 @@
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -51,7 +52,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_deserialize_influxdb() -> Result<(), &'static str> {
+    fn test_deserialize_influxdb() -> Result<()> {
         let yaml = r#"
         type: "influxdb"
         url: "foo"
@@ -71,7 +72,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_postgresql() -> Result<(), &'static str> {
+    fn test_deserialize_postgresql() -> Result<()> {
         let yaml = r#"
         type: "postgresql"
         host: "foo"
@@ -84,7 +85,14 @@ mod tests {
         let result: Target = serde_yaml::from_str(&yaml).unwrap();
         println!("{:?}", result);
 
-        if let Target::Postgresql { host, port, database, user, password } = result {
+        if let Target::Postgresql {
+            host,
+            port,
+            database,
+            user,
+            password,
+        } = result
+        {
             assert_eq!(host, "foo");
             assert_eq!(port, 5432);
             assert_eq!(database, "bar");
@@ -98,7 +106,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_source() -> Result<(), &'static str> {
+    fn test_deserialize_source() -> Result<()> {
         let yaml = r#"
         name: "foo"
         type: "sensor"
@@ -115,10 +123,10 @@ mod tests {
         assert_eq!(result.source_type, SourceType::Sensor);
         assert_eq!(result.prefix, "bar");
 
-        assert!(result.targets.len() == 1);
+        assert_eq!(result.targets.len(), 1);
         let target = &result.targets[0];
 
-        if let Target::InfluxDB { url, database , ..} = target {
+        if let Target::InfluxDB { url, database, .. } = target {
             assert_eq!(url, "baz");
             assert_eq!(database, "qux");
         } else {

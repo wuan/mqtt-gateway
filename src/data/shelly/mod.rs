@@ -2,11 +2,12 @@ use std::fmt;
 use std::fmt::Debug;
 use std::sync::mpsc::SyncSender;
 
+use anyhow::Result;
 use influxdb::{Timestamp, WriteQuery};
 use paho_mqtt::Message;
 use serde::{Deserialize, Serialize};
 
-use crate::data::{CheckMessage, shelly};
+use crate::data::{shelly, CheckMessage};
 use crate::WriteType;
 
 pub trait Timestamped {
@@ -75,16 +76,16 @@ impl fmt::Debug for TemperatureData {
 }
 
 pub struct ShellyLogger {
-    txs: Vec::<SyncSender<WriteQuery>>,
+    txs: Vec<SyncSender<WriteQuery>>,
 }
 
 impl ShellyLogger {
-    pub(crate) fn new(txs: Vec::<SyncSender<WriteQuery>>) -> Self {
+    pub(crate) fn new(txs: Vec<SyncSender<WriteQuery>>) -> Self {
         ShellyLogger { txs }
     }
 }
 
-pub fn parse<'a, T: Deserialize<'a> + Clone>(msg: &'a Message) -> Result<Option<T>, &'static str> {
+pub fn parse<'a, T: Deserialize<'a> + Clone>(msg: &'a Message) -> Result<Option<T>> {
     let data = serde_json::from_slice::<T>(msg.payload()).map_err(|error| {
         eprintln!("{:?}", error);
         "could not deserialize JSON"
@@ -93,21 +94,69 @@ pub fn parse<'a, T: Deserialize<'a> + Clone>(msg: &'a Message) -> Result<Option<
 }
 
 const SWITCH_FIELDS: &[(&str, fn(data: &SwitchData) -> Option<WriteType>, &str)] = &[
-    ("output", |data: &SwitchData| Some(WriteType::Int(data.output as i32)), "bool"),
-    ("power", |data: &SwitchData| data.power.map(|value| WriteType::Float(value)), "W"),
-    ("current", |data: &SwitchData| data.current.map(|value| WriteType::Float(value)), "A"),
-    ("voltage", |data: &SwitchData| data.voltage.map(|value| WriteType::Float(value)), "V"),
-    ("total_energy", |data: &SwitchData| Some(WriteType::Float(data.energy.total)), "Wh"),
-    ("temperature", |data: &SwitchData| Some(WriteType::Float(data.temperature.t_celsius)), "°C"),
+    (
+        "output",
+        |data: &SwitchData| Some(WriteType::Int(data.output as i32)),
+        "bool",
+    ),
+    (
+        "power",
+        |data: &SwitchData| data.power.map(|value| WriteType::Float(value)),
+        "W",
+    ),
+    (
+        "current",
+        |data: &SwitchData| data.current.map(|value| WriteType::Float(value)),
+        "A",
+    ),
+    (
+        "voltage",
+        |data: &SwitchData| data.voltage.map(|value| WriteType::Float(value)),
+        "V",
+    ),
+    (
+        "total_energy",
+        |data: &SwitchData| Some(WriteType::Float(data.energy.total)),
+        "Wh",
+    ),
+    (
+        "temperature",
+        |data: &SwitchData| Some(WriteType::Float(data.temperature.t_celsius)),
+        "°C",
+    ),
 ];
 
 const COVER_FIELDS: &[(&str, fn(data: &CoverData) -> Option<WriteType>, &str)] = &[
-    ("position", |data: &CoverData| data.position.map(|value| WriteType::Int(value)), "%"),
-    ("power", |data: &CoverData| data.power.map(|value| WriteType::Float(value)), "W"),
-    ("current", |data: &CoverData| data.current.map(|value| WriteType::Float(value)), "A"),
-    ("voltage", |data: &CoverData| data.voltage.map(|value| WriteType::Float(value)), "V"),
-    ("total_energy", |data: &CoverData| Some(WriteType::Float(data.energy.total)), "Wh"),
-    ("temperature", |data: &CoverData| Some(WriteType::Float(data.temperature.t_celsius)), "°C"),
+    (
+        "position",
+        |data: &CoverData| data.position.map(|value| WriteType::Int(value)),
+        "%",
+    ),
+    (
+        "power",
+        |data: &CoverData| data.power.map(|value| WriteType::Float(value)),
+        "W",
+    ),
+    (
+        "current",
+        |data: &CoverData| data.current.map(|value| WriteType::Float(value)),
+        "A",
+    ),
+    (
+        "voltage",
+        |data: &CoverData| data.voltage.map(|value| WriteType::Float(value)),
+        "V",
+    ),
+    (
+        "total_energy",
+        |data: &CoverData| Some(WriteType::Float(data.energy.total)),
+        "Wh",
+    ),
+    (
+        "temperature",
+        |data: &CoverData| Some(WriteType::Float(data.temperature.t_celsius)),
+        "°C",
+    ),
 ];
 
 impl CheckMessage for ShellyLogger {
@@ -121,7 +170,11 @@ impl CheckMessage for ShellyLogger {
     }
 }
 
-fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(msg: &'a Message, txs: &Vec::<SyncSender<WriteQuery>>, fields: &[(&str, fn(&T) -> Option<WriteType>, &str)]) {
+fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(
+    msg: &'a Message,
+    txs: &Vec<SyncSender<WriteQuery>>,
+    fields: &[(&str, fn(&T) -> Option<WriteType>, &str)],
+) {
     let location = msg.topic().split("/").nth(1).unwrap();
     let result: Option<T> = shelly::parse(&msg).unwrap();
     if let Some(data) = result {
@@ -133,15 +186,12 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(msg: &'a
                 let query = WriteQuery::new(timestamp, *measurement);
                 if let Some(result) = value(&data) {
                     let query = match result {
-                        WriteType::Int(i) => {
-                            query.add_field("value", i)
-                        }
-                        WriteType::Float(f) => {
-                            query.add_field("value", f)
-                        }
+                        WriteType::Int(i) => query.add_field("value", i),
+                        WriteType::Float(f) => query.add_field("value", f),
                     };
 
-                    let query = query.add_tag("location", location)
+                    let query = query
+                        .add_tag("location", location)
                         .add_tag("sensor", "shelly")
                         .add_tag("type", "switch")
                         .add_tag("unit", unit);
@@ -164,7 +214,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_switch_status() -> Result<(), &'static str> {
+    fn test_parse_switch_status() -> Result<()> {
         let message = Message::new("shellies/loo-fan/status/switch:0", "{\"id\":0, \"source\":\"timer\", \"output\":false, \"apower\":0.0, \"voltage\":226.5, \"current\":3.1, \"aenergy\":{\"total\":1094.865,\"by_minute\":[0.000,0.000,0.000],\"minute_ts\":1703415907},\"temperature\":{\"tC\":36.4, \"tF\":97.5}}", QOS_1);
         let result: SwitchData = parse(&message)?.unwrap();
 
@@ -179,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_cover_status() -> Result<(), &'static str> {
+    fn test_parse_cover_status() -> Result<()> {
         let message = Message::new("shellies/bedroom-curtain/status/cover:0", "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\"apower\":0.0,\"voltage\":231.7,\"current\":0.500,\"pf\":0.00,\"freq\":50.0,\"aenergy\":{\"total\":3.143,\"by_minute\":[0.000,0.000,97.712],\"minute_ts\":1703414519},\"temperature\":{\"tC\":30.7, \"tF\":87.3},\"pos_control\":true,\"last_direction\":\"open\",\"current_pos\":100}", QOS_1);
         let result: CoverData = parse(&message)?.unwrap();
 
@@ -195,7 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_cover_status_without_timestamp() -> Result<(), &'static str> {
+    fn test_parse_cover_status_without_timestamp() -> Result<()> {
         let message = Message::new("shellies/bedroom-curtain/status/cover:0", "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\"apower\":0.0,\"voltage\":231.7,\"current\":0.500,\"pf\":0.00,\"freq\":50.0,\"aenergy\":{\"total\":3.143,\"by_minute\":[0.000,0.000,97.712]},\"temperature\":{\"tC\":30.7, \"tF\":87.3},\"pos_control\":true,\"last_direction\":\"open\",\"current_pos\":100}", QOS_1);
         let result: CoverData = parse(&message)?.unwrap();
 
@@ -205,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_cover_status_without_position() -> Result<(), &'static str> {
+    fn test_parse_cover_status_without_position() -> Result<()> {
         let message = Message::new("shellies/bedroom-curtain/status/cover:0", "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\"apower\":0.0,\"voltage\":231.7,\"current\":0.500,\"pf\":0.00,\"freq\":50.0,\"aenergy\":{\"total\":3.143,\"by_minute\":[0.000,0.000,97.712],\"minute_ts\":1703414519},\"temperature\":{\"tC\":30.7, \"tF\":87.3},\"pos_control\":true,\"last_direction\":\"open\"}", QOS_1);
         let result: CoverData = parse(&message)?.unwrap();
 
