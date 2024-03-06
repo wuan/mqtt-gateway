@@ -49,6 +49,7 @@ pub struct Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
 
     #[test]
     fn test_deserialize_influxdb() -> Result<()> {

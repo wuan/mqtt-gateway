@@ -122,7 +122,7 @@ mod tests {
         let message = Message::new(topic, payload, QOS_1);
         let error = parse(&message).err().unwrap();
 
-        assert_eq!(error.to_string(), "could not deserialize JSON");
+        assert_eq!(error.to_string(), "invalid type: string \"foo\", expected i32 at line 1 column 34");
 
         Ok(())
     }
