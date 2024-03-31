@@ -33,9 +33,8 @@ impl SensorLogger {
     }
 
     fn convert_timestamp(timestamp: i64) -> DateTime<Utc> {
-        let naive_date_time = chrono::NaiveDateTime::from_timestamp_opt(timestamp, 0)
-            .expect("failed to convert timestamp");
-        DateTime::<Utc>::from_naive_utc_and_offset(naive_date_time, Utc)
+        chrono::DateTime::from_timestamp(timestamp, 0)
+            .expect("failed to convert timestamp")
     }
 }
 

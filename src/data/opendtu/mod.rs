@@ -35,7 +35,7 @@ impl CheckMessage for OpenDTULogger {
     fn check_message(&mut self, msg: &Message) {
         let result1 = self.parser.parse(msg).unwrap();
         if let Some(data) = result1 {
-            let timestamp = chrono::NaiveDateTime::from_timestamp_opt(data.timestamp, 0)
+            let timestamp = chrono::DateTime::from_timestamp(data.timestamp, 0)
                 .expect("failed to convert timestamp");
             let month_string = format!("{:04}-{:02}", timestamp.year(), timestamp.month());
             let mut write_query = WriteQuery::new(Seconds(data.timestamp as u128), data.field)
