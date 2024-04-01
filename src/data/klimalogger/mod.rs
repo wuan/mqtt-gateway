@@ -33,8 +33,7 @@ impl SensorLogger {
     }
 
     fn convert_timestamp(timestamp: i64) -> DateTime<Utc> {
-        chrono::DateTime::from_timestamp(timestamp, 0)
-            .expect("failed to convert timestamp")
+        chrono::DateTime::from_timestamp(timestamp, 0).expect("failed to convert timestamp")
     }
 }
 
@@ -121,7 +120,10 @@ mod tests {
         let message = Message::new(topic, payload, QOS_1);
         let error = parse(&message).err().unwrap();
 
-        assert_eq!(error.to_string(), "invalid type: string \"foo\", expected i32 at line 1 column 34");
+        assert_eq!(
+            error.to_string(),
+            "invalid type: string \"foo\", expected i32 at line 1 column 34"
+        );
 
         Ok(())
     }
