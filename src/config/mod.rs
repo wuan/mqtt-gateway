@@ -44,6 +44,8 @@ pub struct Config {
     pub(crate) sources: Vec<Source>,
     #[serde(rename = "mqttUrl")]
     pub(crate) mqtt_url: String,
+    #[serde(rename = "mqttClientId")]
+    pub(crate) mqtt_client_id: String,
 }
 
 #[cfg(test)]

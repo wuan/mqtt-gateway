@@ -65,13 +65,14 @@ fn main() {
         qoss.push(QOS_1);
     }
 
-    let host = config.mqtt_url;
+    let mqtt_url = config.mqtt_url;
+    let mqtt_client_id = config.mqtt_client_id;
 
-    println!("Connecting to the MQTT server at '{}'...", host);
+    println!("Connecting to the MQTT server at '{}'...", mqtt_url);
 
     let create_opts = mqtt::CreateOptionsBuilder::new_v3()
-        .server_uri(host)
-        .client_id("sensors_gateway")
+        .server_uri(mqtt_url)
+        .client_id(mqtt_client_id)
         .finalize();
 
     let mut mqtt_client = mqtt::AsyncClient::new(create_opts).unwrap_or_else(|e| {

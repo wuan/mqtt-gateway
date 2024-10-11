@@ -1,10 +1,12 @@
 use std::fmt;
 use std::fmt::Debug;
 use std::sync::mpsc::SyncSender;
+use std::sync::LazyLock;
 
 use anyhow::Result;
 use influxdb::{Timestamp, WriteQuery};
 use paho_mqtt::Message;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::data::{shelly, CheckMessage};
@@ -12,6 +14,10 @@ use crate::WriteType;
 
 pub trait Timestamped {
     fn timestamp(&self) -> Option<i64>;
+}
+
+pub trait Typenamed {
+    fn type_name(&self) -> &str;
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -32,6 +38,12 @@ impl Timestamped for SwitchData {
     }
 }
 
+impl Typenamed for SwitchData {
+    fn type_name(&self) -> &str {
+        return "switch"
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CoverData {
     #[serde(rename = "current_pos")]
@@ -48,6 +60,12 @@ pub struct CoverData {
 impl Timestamped for CoverData {
     fn timestamp(&self) -> Option<i64> {
         self.energy.minute_ts
+    }
+}
+
+impl Typenamed for CoverData {
+    fn type_name(&self) -> &str {
+        return "cover"
     }
 }
 
@@ -155,26 +173,30 @@ const COVER_FIELDS: &[(&str, fn(data: &CoverData) -> Option<WriteType>, &str)] =
     ),
 ];
 
+static SWITCH_REGEX: LazyLock<Regex, fn() -> Regex> = LazyLock::new(|| Regex::new("/status/switch:.").unwrap());
+static COVER_REGEX: LazyLock<Regex, fn() -> Regex> = LazyLock::new(|| Regex::new("/status/cover:.").unwrap());
+
 impl CheckMessage for ShellyLogger {
     fn check_message(&mut self, msg: &Message) {
         let topic = msg.topic();
-        if topic.ends_with("/status/switch:0") {
+        if SWITCH_REGEX.is_match(topic) {
             handle_message(msg, &self.txs, SWITCH_FIELDS);
-        } else if topic.ends_with("/status/cover:0") {
+        } else if COVER_REGEX.is_match(topic) {
             handle_message(msg, &self.txs, COVER_FIELDS);
         }
     }
 }
 
-fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(
+fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenamed>(
     msg: &'a Message,
     txs: &Vec<SyncSender<WriteQuery>>,
     fields: &[(&str, fn(&T) -> Option<WriteType>, &str)],
 ) {
     let location = msg.topic().split("/").nth(1).unwrap();
+    let channel = msg.topic().split(":").last().unwrap();
     let result: Option<T> = shelly::parse(&msg).unwrap();
     if let Some(data) = result {
-        println!("Shelly {}: {:?}", location, data);
+        println!("Shelly {}:{}: {:?}", location, channel, data);
 
         if let Some(minute_ts) = data.timestamp() {
             let timestamp = Timestamp::Seconds(minute_ts as u128);
@@ -188,8 +210,9 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped>(
 
                     let query = query
                         .add_tag("location", location)
+                        .add_tag("channel", channel)
                         .add_tag("sensor", "shelly")
-                        .add_tag("type", "switch")
+                        .add_tag("type", data.type_name())
                         .add_tag("unit", unit);
 
                     for tx in txs {

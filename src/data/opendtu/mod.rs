@@ -112,10 +112,12 @@ impl OpenDTUParser {
                         let payload = msg.payload_str();
                         if payload.len() > 0 {
                             if let Some(timestamp) = self.timestamp {
-                                println!(
-                                    "OpenDTU {} string {:}: {:}: {:?}",
-                                    section, element, field, payload
-                                );
+                                if false {
+                                    println!(
+                                        "OpenDTU {} string {:}: {:}: {:?}",
+                                        section, element, field, payload
+                                    );
+                                }
                                 data = Some(Data {
                                     timestamp,
                                     device: String::from(section),
