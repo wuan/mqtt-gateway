@@ -40,7 +40,7 @@ impl Timestamped for SwitchData {
 
 impl Typenamed for SwitchData {
     fn type_name(&self) -> &str {
-        return "switch"
+        return "switch";
     }
 }
 
@@ -65,7 +65,7 @@ impl Timestamped for CoverData {
 
 impl Typenamed for CoverData {
     fn type_name(&self) -> &str {
-        return "cover"
+        return "cover";
     }
 }
 
@@ -228,9 +228,78 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
 
 #[cfg(test)]
 mod tests {
-    use paho_mqtt::QOS_1;
-
     use super::*;
+    use influxdb::Query;
+    use paho_mqtt::QOS_1;
+    use std::sync::mpsc::sync_channel;
+    use std::time::Duration;
+
+    #[test]
+    fn test_handle_switch_message() -> Result<()> {
+        let (tx, rx) = sync_channel(100);
+        let txs = vec![tx];
+
+        let mut logger = ShellyLogger::new(txs);
+
+        let message = Message::new("shellies/loo-fan/status/switch:1", "{\"id\":0, \"source\":\"timer\", \"output\":false, \"apower\":0.0, \"voltage\":226.5, \"current\":3.1, \"aenergy\":{\"total\":1094.865,\"by_minute\":[0.000,0.000,0.000],\"minute_ts\":1703415907},\"temperature\":{\"tC\":36.4, \"tF\":97.5}}", QOS_1);
+        logger.check_message(&message);
+
+        let result = rx.recv()?.build()?.get();
+        assert!(result.starts_with("output,location=loo-fan,channel=1,sensor=shelly,type=switch,unit=bool value=0i "));
+
+        let result = rx.recv()?.build()?.get();
+        assert!(result.starts_with("power,location=loo-fan,channel=1,sensor=shelly,type=switch,unit=W value=0 "));
+
+        let result = rx.recv()?.build()?.get();
+        assert!(result.starts_with("current,location=loo-fan,channel=1,sensor=shelly,type=switch,unit=A value=3.0999"));
+
+        let result = rx.recv()?.build()?.get();
+        assert!(result.starts_with("voltage,location=loo-fan,channel=1,sensor=shelly,type=switch,unit=V value=226.5 "));
+
+        let result = rx.recv()?.build()?.get();
+        assert!(result.starts_with("total_energy,location=loo-fan,channel=1,sensor=shelly,type=switch,unit=Wh value=1094.86"));
+
+        let result = rx.recv()?.build()?.get();
+        assert!(result.starts_with("temperature,location=loo-fan,channel=1,sensor=shelly,type=switch,unit=°C value=36.40"));
+
+        let result = rx.recv_timeout(Duration::from_micros(100));
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_handle_curtain_message() -> Result<()> {
+        let (tx, rx) = sync_channel(100);
+        let txs = vec![tx];
+
+        let mut logger = ShellyLogger::new(txs);
+
+        let message = Message::new("shellies/bedroom-curtain/status/cover:0", "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\"apower\":0.0,\"voltage\":231.7,\"current\":0.500,\"pf\":0.00,\"freq\":50.0,\"aenergy\":{\"total\":3.143,\"by_minute\":[0.000,0.000,97.712],\"minute_ts\":1703414519},\"temperature\":{\"tC\":30.7, \"tF\":87.3},\"pos_control\":true,\"last_direction\":\"open\",\"current_pos\":100}", QOS_1);
+        logger.check_message(&message);
+
+        let result = rx.recv()?.build()?.get();
+        assert!(result.starts_with("position,location=bedroom-curtain,channel=0,sensor=shelly,type=cover,unit=% value=100i "));
+
+        let result = rx.recv()?.build()?.get();
+        assert!(result.starts_with("power,location=bedroom-curtain,channel=0,sensor=shelly,type=cover,unit=W value=0 "));
+
+        let result = rx.recv()?.build()?.get();
+        assert!(result.starts_with("current,location=bedroom-curtain,channel=0,sensor=shelly,type=cover,unit=A value=0.5 "));
+
+        let result = rx.recv()?.build()?.get();
+        assert!(result.starts_with("voltage,location=bedroom-curtain,channel=0,sensor=shelly,type=cover,unit=V value=231.6999"));
+
+        let result = rx.recv()?.build()?.get();
+        assert!(result.starts_with("total_energy,location=bedroom-curtain,channel=0,sensor=shelly,type=cover,unit=Wh value=3.14"));
+
+        let result = rx.recv()?.build()?.get();
+        assert!(result.starts_with("temperature,location=bedroom-curtain,channel=0,sensor=shelly,type=cover,unit=°C value=30.7"));
+
+        let result = rx.recv_timeout(Duration::from_micros(100));
+        assert!(result.is_err());
+
+        Ok(())
+    }
 
     #[test]
     fn test_parse_switch_status() -> Result<()> {
