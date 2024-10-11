@@ -51,20 +51,18 @@ impl CheckMessage for SensorLogger {
             let difference = now - date_time;
 
             let has_high_time_offset = difference.num_seconds() > 10;
-            if false {
-                println!(
-                    "Sensor {} \"{}\": {:?} {:.2}s{}",
-                    location,
-                    measurement,
-                    &result,
-                    difference.num_milliseconds() as f32 / 1000.0,
-                    if has_high_time_offset {
-                        " *** HIGH TIME OFFSET ***"
-                    } else {
-                        ""
-                    }
-                );
-            }
+            println!(
+                "Sensor {} \"{}\": {:?} {:.2}s{}",
+                location,
+                measurement,
+                &result,
+                difference.num_milliseconds() as f32 / 1000.0,
+                if has_high_time_offset {
+                    " *** HIGH TIME OFFSET ***"
+                } else {
+                    ""
+                }
+            );
 
             if has_high_time_offset {
                 return;

@@ -13,6 +13,7 @@ File `config.yml` in root folder:
 
 ```yaml
 mqttUrl: "mqtt://<hostname>:1883"
+mqttClientId: "sensors_gateway"
 sources:
   - name: "Sensor data"
     type: "sensor"
