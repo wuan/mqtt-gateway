@@ -18,3 +18,4 @@ chrono = "0.4.38"
 postgres = { version = "0.19.8" , features = ["with-chrono-0_4"] }
 serde_yaml = { version = "0.9.34+deprecated", features = [] }
 anyhow = "1.0.87"
+regex = "1.11.0"
