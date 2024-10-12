@@ -2,3 +2,5 @@
 /.idea
 /config.yml
 /.envrc	
+/cobertura.xml
+/clippy.json

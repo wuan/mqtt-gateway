@@ -1,12 +1,16 @@
 use std::sync::mpsc::SyncSender;
 
+use crate::config::Target;
+use crate::data::CheckMessage;
+use crate::target::influx;
+use crate::target::influx::InfluxConfig;
 use anyhow::Result;
 use chrono::Datelike;
 use influxdb::Timestamp::Seconds;
 use influxdb::WriteQuery;
 use paho_mqtt::Message;
-
-use crate::data::CheckMessage;
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 struct Data {
     timestamp: i64,
@@ -134,7 +138,7 @@ impl OpenDTUParser {
             }
         }
 
-        return Ok(data);
+        Ok(data)
     }
 }
 
@@ -191,4 +195,32 @@ mod tests {
 
         Ok(())
     }
+}
+
+pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>) {
+    let mut txs: Vec<SyncSender<WriteQuery>> = Vec::new();
+    let mut handles: Vec<JoinHandle<()>> = Vec::new();
+
+    for target in targets {
+        let (tx, handle) = match target {
+            Target::InfluxDB {
+                url,
+                database,
+                user,
+                password,
+            } => influx::spawn_influxdb_writer(
+                InfluxConfig::new(url, database, user, password),
+                std::convert::identity,
+            ),
+            Target::Postgresql { .. } => {
+                panic!("Postgresql not supported for opendtu");
+            }
+        };
+        txs.push(tx);
+        handles.push(handle);
+    }
+
+    let logger = OpenDTULogger::new(txs);
+
+    (Arc::new(Mutex::new(logger)), handles)
 }

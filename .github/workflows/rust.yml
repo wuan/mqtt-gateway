@@ -52,6 +52,9 @@ jobs:
       - name: Run Tests with Coverage
         run: cargo tarpaulin --out Xml
 
+      - name: Run Clippy
+        run: cargo clippy --message-format=json &> clippy.json
+
       - name: Update Sonar
         uses: sonarsource/sonarqube-scan-action@v3
         if: github.ref == 'refs/heads/main'
