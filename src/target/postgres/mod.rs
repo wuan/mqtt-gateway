@@ -1,6 +1,10 @@
 use crate::SensorReading;
 use futures::executor::block_on;
-use postgres::{Config, NoTls};
+#[cfg(test)]
+use mockall::automock;
+use postgres::types::ToSql;
+use postgres::Client;
+use postgres::{Error, NoTls};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread;
 use std::thread::JoinHandle;
@@ -31,11 +35,34 @@ impl PostgresConfig {
     }
 }
 
-fn start_postgres_writer(rx: Receiver<SensorReading>, config: Config) {
-    let mut client = config
-        .connect(NoTls)
-        .expect("failed to connect to postgres");
+#[cfg_attr(test, automock)]
+pub trait PostgresClient: Send {
+    fn execute<'a>(
+        &mut self,
+        query: &str,
+        params: &'a [&'a (dyn ToSql + Sync)],
+    ) -> Result<u64, Error>;
+}
 
+struct DefaultPostgresClient {
+    client: Client,
+}
+
+impl DefaultPostgresClient {
+    fn new(client: Client) -> Self {
+        DefaultPostgresClient { client }
+    }
+}
+
+impl DefaultPostgresClient {}
+
+impl PostgresClient for DefaultPostgresClient {
+    fn execute(&mut self, query: &str, params: &[&(dyn ToSql + Sync)]) -> Result<u64, Error> {
+        self.client.execute(query, params)
+    }
+}
+
+fn start_postgres_writer(rx: Receiver<SensorReading>, mut client: Box<dyn PostgresClient>) {
     block_on(async move {
         println!("starting postgres writer async");
 
@@ -77,21 +104,71 @@ fn start_postgres_writer(rx: Receiver<SensorReading>, config: Config) {
 pub fn spawn_postgres_writer(
     config: PostgresConfig,
 ) -> (SyncSender<SensorReading>, JoinHandle<()>) {
-    let (tx, rx) = sync_channel(100);
+    let client = create_postgres_client(&config);
+    spawn_postgres_writer_internal(client)
+}
 
-    let mut db_config = postgres::Config::new();
-    let _ = db_config
+fn create_postgres_client(config: &PostgresConfig) -> Box<dyn PostgresClient> {
+    let client = postgres::Config::new()
         .host(&config.host)
         .port(config.port)
         .user(&config.username)
-        .password(config.password)
-        .dbname(&config.database);
+        .password(&config.password)
+        .dbname(&config.database)
+        .connect(NoTls)
+        .expect("failed to connect to Postgres database");
+    Box::new(DefaultPostgresClient::new(client))
+}
+
+pub fn spawn_postgres_writer_internal(
+    client: Box<dyn PostgresClient>,
+) -> (SyncSender<SensorReading>, JoinHandle<()>) {
+    let (tx, rx) = sync_channel(100);
 
     (
         tx,
         thread::spawn(move || {
             println!("starting postgres writer");
-            start_postgres_writer(rx, db_config);
+            start_postgres_writer(rx, client);
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_postgres_writer_internal() -> anyhow::Result<()> {
+        let sensor_reading = SensorReading {
+            measurement: "measurement".to_string(),
+            time: chrono::Utc::now(),
+            location: "location".to_string(),
+            sensor: "sensor".to_string(),
+            value: 123.4,
+        };
+
+        let sensor_reading_duplicate = sensor_reading.clone();
+
+        let mut mock_client = Box::new(MockPostgresClient::new());
+        mock_client.expect_execute()
+            .times(1)
+            .withf(move |query, parameters| {
+                let expected_parameters: [&dyn ToSql; 4] = [&sensor_reading_duplicate.time, &sensor_reading_duplicate.location, &sensor_reading_duplicate.sensor, &sensor_reading_duplicate.value];
+                query == "insert into \"measurement\" (time, location, sensor, value) values ($1, $2, $3, $4);" ||
+                    parameters.len() == expected_parameters.len() &&
+                        parameters.iter().zip(expected_parameters.iter()).all(|(a, b)| format!("{a:?}") == format!("{b:?}"))
+            })
+            .returning(|_, _| Ok(123));
+
+        let (tx, join_handle) = spawn_postgres_writer_internal(mock_client);
+
+        tx.send(sensor_reading).unwrap();
+
+        drop(tx);
+
+        let _ = join_handle.join();
+
+        Ok(())
+    }
 }

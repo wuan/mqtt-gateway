@@ -1,13 +1,19 @@
 use std::fmt;
 use std::sync::mpsc::SyncSender;
 
+use crate::config::Target;
+use crate::data::CheckMessage;
+use crate::target::influx;
+use crate::target::influx::InfluxConfig;
+use crate::target::postgres::PostgresConfig;
+use crate::{target, SensorReading};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use influxdb::{Timestamp, WriteQuery};
 use paho_mqtt::Message;
 use serde::{Deserialize, Serialize};
-
-use crate::data::CheckMessage;
-use crate::SensorReading;
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Data {
@@ -43,7 +49,7 @@ impl CheckMessage for SensorLogger {
 
         let location = split.nth(1);
         let measurement = split.next();
-        let result = parse(&msg);
+        let result = parse(msg);
         if let (Some(location), Some(measurement), Ok(result)) = (location, measurement, &result) {
             let date_time = Self::convert_timestamp(result.timestamp as i64);
 
@@ -173,4 +179,46 @@ mod tests {
 
         Ok(())
     }
+}
+
+pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>) {
+    let mut txs: Vec<SyncSender<SensorReading>> = Vec::new();
+    let mut handles: Vec<JoinHandle<()>> = Vec::new();
+
+    for target in targets {
+        let (tx, handle) = match target {
+            Target::InfluxDB {
+                url,
+                database,
+                user,
+                password,
+            } => {
+                fn mapper(result: SensorReading) -> WriteQuery {
+                    let timestamp = Timestamp::Seconds(result.time.timestamp() as u128);
+                    WriteQuery::new(timestamp, result.measurement.to_string())
+                        .add_tag("location", result.location.to_string())
+                        .add_tag("sensor", result.sensor.to_string())
+                        .add_field("value", result.value)
+                }
+
+                influx::spawn_influxdb_writer(
+                    InfluxConfig::new(url, database, user, password),
+                    mapper,
+                )
+            }
+            Target::Postgresql {
+                host,
+                port,
+                user,
+                password,
+                database,
+            } => target::postgres::spawn_postgres_writer(PostgresConfig::new(
+                host, port, user, password, database,
+            )),
+        };
+        txs.push(tx);
+        handles.push(handle);
+    }
+
+    (Arc::new(Mutex::new(SensorLogger::new(txs))), handles)
 }

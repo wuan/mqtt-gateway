@@ -1,35 +1,27 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::{fs, process, time::Duration};
 
-use crate::config::{SourceType, Target};
-use crate::data::klimalogger::SensorLogger;
-use crate::data::opendtu::OpenDTULogger;
-use crate::data::shelly::ShellyLogger;
+use crate::config::SourceType;
 use crate::data::CheckMessage;
-use crate::target::influx::InfluxConfig;
-use crate::target::postgres::PostgresConfig;
 use chrono::{DateTime, Utc};
+use data::{klimalogger, opendtu, shelly};
 use futures::{executor::block_on, stream::StreamExt};
-use influxdb::{Timestamp, WriteQuery};
 use paho_mqtt as mqtt;
-use paho_mqtt::QOS_1;
-use target::influx;
-
+use paho_mqtt::{AsyncClient, QOS_1};
 mod config;
 mod data;
 mod target;
 
 #[derive(Debug, Clone)]
-struct SensorReading {
-    measurement: String,
-    time: DateTime<Utc>,
-    location: String,
-    sensor: String,
-    value: f32,
+pub struct SensorReading {
+    pub measurement: String,
+    pub time: DateTime<Utc>,
+    pub location: String,
+    pub sensor: String,
+    pub value: f32,
 }
 
 pub enum WriteType {
@@ -54,9 +46,9 @@ fn main() {
 
     for source in config.sources {
         let (logger, mut source_handles) = match source.source_type {
-            SourceType::Shelly => create_shelly_logger(source.targets),
-            SourceType::Sensor => create_sensor_logger(source.targets),
-            SourceType::OpenDTU => create_opendtu_logger(source.targets),
+            SourceType::Shelly => shelly::create_logger(source.targets),
+            SourceType::Sensor => klimalogger::create_logger(source.targets),
+            SourceType::OpenDTU => opendtu::create_logger(source.targets),
         };
         handler_map.insert(source.prefix.clone(), logger);
         handles.append(&mut source_handles);
@@ -65,20 +57,7 @@ fn main() {
         qoss.push(QOS_1);
     }
 
-    let mqtt_url = config.mqtt_url;
-    let mqtt_client_id = config.mqtt_client_id;
-
-    println!("Connecting to the MQTT server at '{}'...", mqtt_url);
-
-    let create_opts = mqtt::CreateOptionsBuilder::new_v3()
-        .server_uri(mqtt_url)
-        .client_id(mqtt_client_id)
-        .finalize();
-
-    let mut mqtt_client = mqtt::AsyncClient::new(create_opts).unwrap_or_else(|e| {
-        println!("Error creating the client: {:?}", e);
-        process::exit(1);
-    });
+    let mut mqtt_client = create_mqtt_client(config.mqtt_url, config.mqtt_client_id);
 
     if let Err(err) = block_on(async {
         // Get message stream before connecting.
@@ -93,7 +72,7 @@ fn main() {
         mqtt_client.connect(conn_opts).await?;
 
         println!("Subscribing to topics: {:?}", &topics);
-        mqtt_client.subscribe_many(&*topics, &*qoss).await?;
+        mqtt_client.subscribe_many(&topics, &qoss).await?;
 
         println!("Waiting for messages...");
 
@@ -132,104 +111,16 @@ fn main() {
     }
 }
 
-fn create_shelly_logger(
-    targets: Vec<Target>,
-) -> (Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>) {
-    let mut txs: Vec<SyncSender<WriteQuery>> = Vec::new();
-    let mut handles: Vec<JoinHandle<()>> = Vec::new();
+fn create_mqtt_client(mqtt_url: String, mqtt_client_id: String) -> AsyncClient {
+    println!("Connecting to the MQTT server at '{}'...", mqtt_url);
 
-    for target in targets {
-        let (tx, handle) = match target {
-            Target::InfluxDB {
-                url,
-                database,
-                user,
-                password,
-            } => influx::spawn_influxdb_writer(
-                InfluxConfig::new(url, database, user, password),
-                std::convert::identity,
-            ),
-            Target::Postgresql { .. } => {
-                panic!("Postgresql not supported for shelly");
-            }
-        };
-        txs.push(tx);
-        handles.push(handle);
-    }
+    let create_opts = mqtt::CreateOptionsBuilder::new_v3()
+        .server_uri(mqtt_url)
+        .client_id(mqtt_client_id)
+        .finalize();
 
-    (Arc::new(Mutex::new(ShellyLogger::new(txs))), handles)
-}
-
-fn create_sensor_logger(
-    targets: Vec<Target>,
-) -> (Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>) {
-    let mut txs: Vec<SyncSender<SensorReading>> = Vec::new();
-    let mut handles: Vec<JoinHandle<()>> = Vec::new();
-
-    for target in targets {
-        let (tx, handle) = match target {
-            Target::InfluxDB {
-                url,
-                database,
-                user,
-                password,
-            } => {
-                fn mapper(result: SensorReading) -> WriteQuery {
-                    let timestamp = Timestamp::Seconds(result.time.timestamp() as u128);
-                    WriteQuery::new(timestamp, result.measurement.to_string())
-                        .add_tag("location", result.location.to_string())
-                        .add_tag("sensor", result.sensor.to_string())
-                        .add_field("value", result.value)
-                }
-
-                influx::spawn_influxdb_writer(
-                    InfluxConfig::new(url, database, user, password),
-                    mapper,
-                )
-            }
-            Target::Postgresql {
-                host,
-                port,
-                user,
-                password,
-                database,
-            } => target::postgres::spawn_postgres_writer(PostgresConfig::new(
-                host, port, user, password, database,
-            )),
-        };
-        txs.push(tx);
-        handles.push(handle);
-    }
-
-    (Arc::new(Mutex::new(SensorLogger::new(txs))), handles)
-}
-
-fn create_opendtu_logger(
-    targets: Vec<Target>,
-) -> (Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>) {
-    let mut txs: Vec<SyncSender<WriteQuery>> = Vec::new();
-    let mut handles: Vec<JoinHandle<()>> = Vec::new();
-
-    for target in targets {
-        let (tx, handle) = match target {
-            Target::InfluxDB {
-                url,
-                database,
-                user,
-                password,
-            } => influx::spawn_influxdb_writer(
-                InfluxConfig::new(url, database, user, password),
-                std::convert::identity,
-            ),
-            Target::Postgresql { .. } => {
-                panic!("Postgresql not supported for opendtu");
-            }
-        };
-        txs.push(tx);
-        handles.push(handle);
-    }
-
-    let logger = OpenDTULogger::new(txs);
-
-    (Arc::new(Mutex::new(logger)), handles)
+    mqtt::AsyncClient::new(create_opts).unwrap_or_else(|e| {
+        println!("Error creating the client: {:?}", e);
+        process::exit(1);
+    })
 }
