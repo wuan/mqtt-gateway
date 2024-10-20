@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::{fs, process, time::Duration};
+use std::{fs, time::Duration};
 
 use crate::config::SourceType;
 use crate::data::CheckMessage;
@@ -10,10 +10,11 @@ use chrono::{DateTime, Utc};
 use data::{klimalogger, opendtu, shelly};
 use futures::{executor::block_on, stream::StreamExt};
 use paho_mqtt as mqtt;
-use paho_mqtt::{AsyncClient, QOS_1};
+use paho_mqtt::QOS_1;
 mod config;
 mod data;
 mod target;
+mod source;
 
 #[derive(Debug, Clone)]
 pub struct SensorReading {
@@ -35,7 +36,7 @@ fn main() {
 
     let config_string = fs::read_to_string("config.yml").expect("failed to read config file");
     let config: config::Config =
-        serde_yaml::from_str(&config_string).expect("failed to parse config file");
+        serde_yml::from_str(&config_string).expect("failed to parse config file");
 
     println!("config: {:?}", config);
 
@@ -57,7 +58,7 @@ fn main() {
         qoss.push(QOS_1);
     }
 
-    let mut mqtt_client = create_mqtt_client(config.mqtt_url, config.mqtt_client_id);
+    let mut mqtt_client = source::mqtt::create_mqtt_client(config.mqtt_url, config.mqtt_client_id);
 
     if let Err(err) = block_on(async {
         // Get message stream before connecting.
@@ -111,16 +112,3 @@ fn main() {
     }
 }
 
-fn create_mqtt_client(mqtt_url: String, mqtt_client_id: String) -> AsyncClient {
-    println!("Connecting to the MQTT server at '{}'...", mqtt_url);
-
-    let create_opts = mqtt::CreateOptionsBuilder::new_v3()
-        .server_uri(mqtt_url)
-        .client_id(mqtt_client_id)
-        .finalize();
-
-    mqtt::AsyncClient::new(create_opts).unwrap_or_else(|e| {
-        println!("Error creating the client: {:?}", e);
-        process::exit(1);
-    })
-}
