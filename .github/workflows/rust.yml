@@ -1,4 +1,4 @@
-name: Rust
+name: Build Rust
 
 on:
   workflow_dispatch:
@@ -60,7 +60,11 @@ jobs:
         if: github.ref == 'refs/heads/main'
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_x  URL }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: Build Release
+        run: cargo build --release
+
   # If you wish to fail your job when the Quality Gate is red, uncomment the
   # following lines. This would typically be used to fail a deployment.
   # - uses: sonarsource/sonarqube-quality-gate-action@master
