@@ -1,4 +1,4 @@
-name: Build Rust
+name: Build
 
 on:
   workflow_dispatch:
@@ -64,6 +64,11 @@ jobs:
 
       - name: Build Release
         run: cargo build --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mqtt-gateway
+          path: target/release/mqtt-gateway
 
   # If you wish to fail your job when the Quality Gate is red, uncomment the
   # following lines. This would typically be used to fail a deployment.
