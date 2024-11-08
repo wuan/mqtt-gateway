@@ -1,4 +1,4 @@
-FROM rust:1.82
+FROM FROM debian:bookworm-slim
 
 COPY target/release/mqtt-gateway ./
 
