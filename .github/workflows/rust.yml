@@ -22,7 +22,7 @@ jobs:
           fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
 
       - name: Install Rust
-        run: rustup update {{ env.toolchain }} && rustup default ${{ env.toolchain }}
+        run: rustup update ${{ env.toolchain }} && rustup default ${{ env.toolchain }}
 
       - name: Install Cargo Tarpaulin
         run: cargo install cargo-tarpaulin
