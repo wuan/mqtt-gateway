@@ -14,6 +14,7 @@ use paho_mqtt::Message;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use log::{debug, warn};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Data {
@@ -57,7 +58,7 @@ impl CheckMessage for SensorLogger {
             let difference = now - date_time;
 
             let has_high_time_offset = difference.num_seconds() > 10;
-            println!(
+            debug!(
                 "Sensor {} \"{}\": {:?} {:.2}s{}",
                 location,
                 measurement,
@@ -86,7 +87,7 @@ impl CheckMessage for SensorLogger {
                 tx.send(sensor_reading.clone()).expect("failed to send");
             }
         } else {
-            println!("FAILED: {:?}, {:?}, {:?}", location, measurement, &result);
+            warn!("FAILED: {:?}, {:?}, {:?}", location, measurement, &result);
         }
     }
 }

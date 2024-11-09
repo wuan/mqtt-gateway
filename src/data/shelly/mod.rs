@@ -16,6 +16,7 @@ use paho_mqtt::Message;
 use regex::Regex;
 use serde::Deserialize;
 use std::thread::JoinHandle;
+use log::{debug, warn};
 
 pub trait Timestamped {
     fn timestamp(&self) -> Option<i64>;
@@ -132,7 +133,7 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
     let channel = msg.topic().split(":").last().unwrap();
     let result: Option<T> = shelly::parse(msg).unwrap();
     if let Some(data) = result {
-        println!("Shelly {}:{}: {:?}", location, channel, data);
+        debug!("Shelly {}:{}: {:?}", location, channel, data);
 
         if let Some(minute_ts) = data.timestamp() {
             let timestamp = Timestamp::Seconds(minute_ts as u128);
@@ -157,7 +158,7 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
                 }
             }
         } else {
-            println!("{} no timestamp {:?}", msg.topic(), msg.payload_str());
+            warn!("{} no timestamp {:?}", msg.topic(), msg.payload_str());
         }
     }
 }

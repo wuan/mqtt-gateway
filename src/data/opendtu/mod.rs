@@ -11,6 +11,7 @@ use influxdb::WriteQuery;
 use paho_mqtt::Message;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use log::{debug, trace};
 
 struct Data {
     timestamp: i64,
@@ -84,7 +85,7 @@ impl OpenDTUParser {
                 match element {
                     "0" => {
                         if let Some(timestamp) = self.timestamp {
-                            println!(
+                            debug!(
                                 "OpenDTU {} inverter: {:}: {:?}",
                                 section,
                                 field,
@@ -101,22 +102,22 @@ impl OpenDTUParser {
                         }
                     }
                     "device" => {
-                        // ignore device global data
-                        // println!("  device: {:}: {:?}", field, msg.payload_str())
+                        // ignore device global data 
+                        trace!("  device: {:}: {:?}", field, msg.payload_str())
                     }
                     "status" => {
                         if field == "last_update" {
                             self.timestamp = Some(msg.payload_str().parse::<i64>()?);
                         } else {
                             // ignore other status data
-                            // println!("  status: {:}: {:?}", field, msg.payload_str());
+                            trace!("  status: {:}: {:?}", field, msg.payload_str());
                         }
                     }
                     _ => {
                         let payload = msg.payload_str();
                         if payload.len() > 0 {
                             if let Some(timestamp) = self.timestamp {
-                                println!(
+                                debug!(
                                     "OpenDTU {} string {:}: {:}: {:?}",
                                     section, element, field, payload
                                 );
@@ -134,7 +135,7 @@ impl OpenDTUParser {
                 }
             } else {
                 // global options -> ignore for now
-                // println!(" global {:}.{:}: {:?}", section, element, msg.payload_str())
+                trace!(" global {:}.{:}: {:?}", section, element, msg.payload_str())
             }
         }
 

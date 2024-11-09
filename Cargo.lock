@@ -1396,6 +1396,7 @@ dependencies = [
  "env_logger",
  "futures",
  "influxdb",
+ "log",
  "mockall",
  "paho-mqtt",
  "postgres",

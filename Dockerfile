@@ -8,4 +8,5 @@ RUN chmod a+x mqtt-gateway
 
 VOLUME /config
 
+ENV RUST_LOG=info
 CMD ["./mqtt-gateway"]

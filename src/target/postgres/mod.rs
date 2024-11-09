@@ -8,6 +8,7 @@ use postgres::{Error, NoTls};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread;
 use std::thread::JoinHandle;
+use log::{error, info, warn};
 
 pub struct PostgresConfig {
     host: String,
@@ -64,14 +65,14 @@ impl PostgresClient for DefaultPostgresClient {
 
 fn start_postgres_writer(rx: Receiver<SensorReading>, mut client: Box<dyn PostgresClient>) {
     block_on(async move {
-        println!("starting postgres writer async");
+        info!("starting postgres writer async");
 
         loop {
             let result = rx.recv();
             let query = match result {
                 Ok(query) => query,
                 Err(error) => {
-                    println!("error receiving query: {:?}", error);
+                    warn!("error receiving query: {:?}", error);
                     break;
                 }
             };
@@ -88,17 +89,17 @@ fn start_postgres_writer(rx: Receiver<SensorReading>, mut client: Box<dyn Postgr
             match x {
                 Ok(_) => {}
                 Err(error) => {
-                    eprintln!(
+                    error!(
                         "#### Error writing to postgres: {} {:?}",
                         query.measurement, error
                     );
                 }
             }
         }
-        println!("exiting influx writer async");
+        info!("exiting influx writer async");
     });
 
-    println!("exiting influx writer");
+    info!("exiting influx writer");
 }
 
 pub fn spawn_postgres_writer(
@@ -128,7 +129,7 @@ pub fn spawn_postgres_writer_internal(
     (
         tx,
         thread::spawn(move || {
-            println!("starting postgres writer");
+            info!("starting postgres writer");
             start_postgres_writer(rx, client);
         }),
     )

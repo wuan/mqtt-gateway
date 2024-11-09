@@ -12,6 +12,8 @@ use data::{klimalogger, opendtu, shelly};
 use futures::{executor::block_on, stream::StreamExt};
 use paho_mqtt as mqtt;
 use paho_mqtt::QOS_1;
+use log::{debug, error, info, warn};
+
 mod config;
 mod data;
 mod target;
@@ -41,7 +43,7 @@ fn main() {
     let config: config::Config =
         serde_yml::from_str(&config_string).expect("failed to parse config file");
 
-    println!("config: {:?}", config);
+    debug!("config: {:?}", config);
 
     let mut handler_map: HashMap<String, Arc<Mutex<dyn CheckMessage>>> = HashMap::new();
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
@@ -65,7 +67,7 @@ fn main() {
 
     if let Err(err) = block_on(async {
         // Get message stream before connecting.
-        let mut strm = mqtt_client.get_stream(25);
+        let mut strm = mqtt_client.get_stream(200);
 
         let conn_opts = mqtt::ConnectOptionsBuilder::new_v5()
             .keep_alive_interval(Duration::from_secs(30))
@@ -75,10 +77,10 @@ fn main() {
 
         mqtt_client.connect(conn_opts).await?;
 
-        println!("Subscribing to topics: {:?}", &topics);
+        info!("Subscribing to topics: {:?}", &topics);
         mqtt_client.subscribe_many(&topics, &qoss).await?;
 
-        println!("Waiting for messages...");
+        info!("Waiting for messages...");
 
         while let Some(msg_opt) = strm.next().await {
             if let Some(msg) = msg_opt {
@@ -88,16 +90,16 @@ fn main() {
                 if let Some(handler) = handler {
                     handler.lock().unwrap().check_message(&msg);
                 } else {
-                    println!("unhandled prefix {} from topic {}", prefix, msg.topic());
+                    warn!("unhandled prefix {} from topic {}", prefix, msg.topic());
                 }
             } else {
                 // A "None" means we were disconnected. Try to reconnect...
-                println!(
+                warn!(
                     "Lost connection. Attempting reconnect. {:?}",
                     mqtt_client.is_connected()
                 );
                 while let Err(err) = mqtt_client.reconnect().await {
-                    println!("Error reconnecting: {}", err);
+                    warn!("Error reconnecting: {}", err);
                     // For tokio use: tokio::time::delay_for()
                     async_std::task::sleep(Duration::from_millis(1000)).await;
                 }
@@ -111,7 +113,7 @@ fn main() {
         // Explicit return type for the async block
         Ok::<(), mqtt::Error>(())
     }) {
-        eprintln!("{}", err);
+        error!("{}", err);
     }
 }
 
@@ -131,7 +133,7 @@ fn determine_config_file_path() -> String {
     }
 
     if config_file_path.is_none() {
-        println!("ERROR: no configuration file found");
+        error!("ERROR: no configuration file found");
         exit(10);
     }
     
