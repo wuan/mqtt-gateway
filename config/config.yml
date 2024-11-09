@@ -1,0 +1,39 @@
+mqttUrl: "mqtt://mqtt.home.wuerl.net:1883"
+mqttClientId: "sensors_gateway_dev"
+sources:
+  - name: "Sensor data"
+    type: "sensor"
+    prefix: "sensors"
+    targets:
+#      - type: "influxdb"
+#        host: "influx.home.wuerl.net"
+#        port: 8086
+#        database: "sensors"
+#      - type: "postgresql"
+#        host: "atlas.home.wuerl.net"
+#        port: 5433
+#        user: "postgres"
+#        password: "iUtHPTBprMp7wBMqiUHgZROG"
+#        database: "sensors"
+  - name: "Shelly data"
+    type: "shelly"
+    prefix: "shellies"
+    targets:
+#      - type: "influxdb"
+#        host: "influx.home.wuerl.net"
+#        port: 8086
+#        database: "shelly"
+#      - type: "postgresql"
+#        host: "atlas.home.wuerl.net"
+#        port: 5433
+#        user: "postgres"
+#        password: "iUtHPTBprMp7wBMqiUHgZROG"
+#        database: "shelly"
+  - name: "PV data"
+    type: "opendtu"
+    prefix: "solar"
+    targets:
+#      - type: "influxdb"
+#        host: "influx.home.wuerl.net"
+#        port: 8086
+#        database: "solar"
