@@ -7,6 +7,7 @@ use mockall::automock;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread;
 use std::thread::JoinHandle;
+use log::{info, warn};
 
 pub struct InfluxConfig {
     url: String,
@@ -75,7 +76,7 @@ fn influxdb_writer<T>(
     query_mapper: fn(T) -> WriteQuery,
 ) {
     block_on(async move {
-        println!(
+        info!(
             "starting influx writer async {} {}",
             &influx_config.url, &influx_config.database
         );
@@ -85,7 +86,7 @@ fn influxdb_writer<T>(
             let data = match result {
                 Ok(query) => query,
                 Err(error) => {
-                    println!("error receiving query: {:?}", error);
+                    warn!("error receiving query: {:?}", error);
                     break;
                 }
             };
@@ -101,10 +102,10 @@ fn influxdb_writer<T>(
                 }
             }
         }
-        println!("exiting influx writer async");
+        info!("exiting influx writer async");
     });
 
-    println!("exiting influx writer");
+    info!("exiting influx writer");
 }
 
 pub fn spawn_influxdb_writer<T: Send + 'static>(
@@ -126,7 +127,7 @@ fn spawn_influxdb_writer_internal<T: Send + 'static>(
     (
         tx,
         thread::spawn(move || {
-            println!(
+            info!(
                 "starting influx writer {} {}",
                 &influx_config.url, &influx_config.database
             );
@@ -143,7 +144,7 @@ mod tests {
 
     // A mock `WriteQuery` for testing purposes
     fn mock_write_query(data: String) -> WriteQuery {
-        println!("mock write query {}", data);
+        info!("mock write query {}", data);
 
         assert_eq!(data, "test_data");
 

@@ -52,6 +52,7 @@ pub struct Config {
 mod tests {
     use super::*;
     use anyhow::Result;
+    use log::debug;
 
     #[test]
     fn test_deserialize_influxdb() -> Result<()> {
@@ -85,7 +86,7 @@ mod tests {
         "#;
 
         let result: Target = serde_yml::from_str(&yaml).unwrap();
-        println!("{:?}", result);
+        debug!("{:?}", result);
 
         if let Target::Postgresql {
             host,
