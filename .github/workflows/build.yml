@@ -64,7 +64,8 @@ jobs:
       - name: Build Release
         run: cargo build --release
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload Release
+        uses: actions/upload-artifact@v4
         with:
           name: mqtt-gateway
           path: target/release/mqtt-gateway
@@ -75,7 +76,7 @@ jobs:
   #   timeout-minutes: 5
   #   env:
   #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-  build-and-push-image:
+  docker-image:
     runs-on: ubuntu-latest
     if:
     needs: build
@@ -130,5 +131,3 @@ jobs:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
-
-
