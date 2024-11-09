@@ -3,7 +3,8 @@ use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::{fs, time::Duration};
-
+use std::path::Path;
+use std::process::exit;
 use crate::config::SourceType;
 use crate::data::CheckMessage;
 use chrono::{DateTime, Utc};
@@ -34,7 +35,9 @@ fn main() {
     // Initialize the logger from the environment
     env_logger::init();
 
-    let config_string = fs::read_to_string("config.yml").expect("failed to read config file");
+    let config_file_path = determine_config_file_path();
+    
+    let config_string = fs::read_to_string(config_file_path).expect("failed to read config file");
     let config: config::Config =
         serde_yml::from_str(&config_string).expect("failed to parse config file");
 
@@ -110,5 +113,28 @@ fn main() {
     }) {
         eprintln!("{}", err);
     }
+}
+
+fn determine_config_file_path() -> String {
+    let config_file_name = "config.yml";
+    let config_locations = ["./", "./config"];
+
+    let mut config_file_path: Option<String> = None;
+
+    for config_location in config_locations {
+        let path = Path::new(config_location);
+        let tmp_config_file_path = path.join(Path::new(config_file_name));
+        if tmp_config_file_path.exists() && tmp_config_file_path.is_file() {
+            config_file_path = Some(String::from(tmp_config_file_path.to_str().unwrap()));
+            break;
+        }
+    }
+
+    if config_file_path.is_none() {
+        println!("ERROR: no configuration file found");
+        exit(10);
+    }
+    
+    config_file_path.unwrap()
 }
 
