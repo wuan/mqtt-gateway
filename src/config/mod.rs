@@ -8,6 +8,10 @@ pub enum SourceType {
     Sensor,
     #[serde(rename = "opendtu")]
     OpenDTU,
+    #[serde(rename = "openmqttgateway")]
+    OpenMqttGateway,
+    #[serde(rename = "debug")]
+    Debug,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -16,7 +20,7 @@ pub struct Source {
     #[serde(rename = "type")]
     pub(crate) source_type: SourceType,
     pub(crate) prefix: String,
-    pub(crate) targets: Vec<Target>,
+    pub(crate) targets: Option<Vec<Target>>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
@@ -37,6 +41,9 @@ pub enum Target {
         password: String,
         database: String,
     },
+    // #[serde(rename = "debug")]
+    // Debug {
+    // },
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
@@ -126,8 +133,9 @@ mod tests {
         assert_eq!(result.source_type, SourceType::Sensor);
         assert_eq!(result.prefix, "bar");
 
-        assert_eq!(result.targets.len(), 1);
-        let target = &result.targets[0];
+        let targets = result.targets.unwrap();
+        assert_eq!(targets.len(), 1);
+        let target = &targets[0];
 
         if let Target::InfluxDB { url, database, .. } = target {
             assert_eq!(url, "baz");

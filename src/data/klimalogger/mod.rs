@@ -10,11 +10,11 @@ use crate::{target, SensorReading};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use influxdb::{Timestamp, WriteQuery};
+use log::{debug, warn};
 use paho_mqtt::Message;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use log::{debug, warn};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Data {

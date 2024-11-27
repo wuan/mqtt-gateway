@@ -1,5 +1,6 @@
 use crate::SensorReading;
 use futures::executor::block_on;
+use log::{error, info, warn};
 #[cfg(test)]
 use mockall::automock;
 use postgres::types::ToSql;
@@ -8,7 +9,6 @@ use postgres::{Error, NoTls};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread;
 use std::thread::JoinHandle;
-use log::{error, info, warn};
 
 pub struct PostgresConfig {
     host: String,

@@ -1,6 +1,6 @@
+use log::{error, info};
 use paho_mqtt as mqtt;
 use std::process;
-use log::{error, info};
 
 pub fn create_mqtt_client(mqtt_url: String, mqtt_client_id: String) -> mqtt::AsyncClient {
     info!("Connecting to the MQTT server at '{}'...", mqtt_url);

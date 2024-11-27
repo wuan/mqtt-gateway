@@ -1,23 +1,23 @@
-use std::collections::HashMap;
-use std::fmt::Debug;
-use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
-use std::{fs, time::Duration};
-use std::path::Path;
-use std::process::exit;
 use crate::config::SourceType;
-use crate::data::CheckMessage;
+use crate::data::{debug, openmqttgateway, CheckMessage};
 use chrono::{DateTime, Utc};
 use data::{klimalogger, opendtu, shelly};
 use futures::{executor::block_on, stream::StreamExt};
+use log::{debug, error, info, warn};
 use paho_mqtt as mqtt;
 use paho_mqtt::QOS_1;
-use log::{debug, error, info, warn};
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::path::Path;
+use std::process::exit;
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::{env, fs, time::Duration};
 
 mod config;
 mod data;
-mod target;
 mod source;
+mod target;
 
 #[derive(Debug, Clone)]
 pub struct SensorReading {
@@ -34,11 +34,14 @@ pub enum WriteType {
 }
 
 fn main() {
+    if env::var("RUST_LOG").is_err() {
+        env::set_var("RUST_LOG", "info")
+    }
     // Initialize the logger from the environment
     env_logger::init();
 
     let config_file_path = determine_config_file_path();
-    
+
     let config_string = fs::read_to_string(config_file_path).expect("failed to read config file");
     let config: config::Config =
         serde_yml::from_str(&config_string).expect("failed to parse config file");
@@ -51,10 +54,13 @@ fn main() {
     let mut qoss: Vec<i32> = Vec::new();
 
     for source in config.sources {
+        let targets = source.targets.unwrap_or_default();
         let (logger, mut source_handles) = match source.source_type {
-            SourceType::Shelly => shelly::create_logger(source.targets),
-            SourceType::Sensor => klimalogger::create_logger(source.targets),
-            SourceType::OpenDTU => opendtu::create_logger(source.targets),
+            SourceType::Shelly => shelly::create_logger(targets),
+            SourceType::Sensor => klimalogger::create_logger(targets),
+            SourceType::OpenDTU => opendtu::create_logger(targets),
+            SourceType::OpenMqttGateway => openmqttgateway::create_logger(targets),
+            SourceType::Debug => debug::create_logger(targets),
         };
         handler_map.insert(source.prefix.clone(), logger);
         handles.append(&mut source_handles);
@@ -136,7 +142,6 @@ fn determine_config_file_path() -> String {
         error!("ERROR: no configuration file found");
         exit(10);
     }
-    
+
     config_file_path.unwrap()
 }
-
