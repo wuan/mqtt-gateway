@@ -25,8 +25,7 @@ sources:
     prefix: "sensors"
     targets:
       - type: "influxdb"
-        host: "<influx host>"
-        port: 8086
+        url: "http://<host>:8086"
         database: "sensors"
       - type: "postgresql"
         host: "<postgres host>"

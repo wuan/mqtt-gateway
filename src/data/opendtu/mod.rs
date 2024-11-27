@@ -8,10 +8,10 @@ use anyhow::Result;
 use chrono::Datelike;
 use influxdb::Timestamp::Seconds;
 use influxdb::WriteQuery;
+use log::{debug, trace};
 use paho_mqtt::Message;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use log::{debug, trace};
 
 struct Data {
     timestamp: i64,
@@ -102,7 +102,7 @@ impl OpenDTUParser {
                         }
                     }
                     "device" => {
-                        // ignore device global data 
+                        // ignore device global data
                         trace!("  device: {:}: {:?}", field, msg.payload_str())
                     }
                     "status" => {

@@ -2,12 +2,12 @@ use async_trait::async_trait;
 //use anyhow::Result;
 use futures::executor::block_on;
 use influxdb::{Client, WriteQuery};
+use log::{info, warn};
 #[cfg(test)]
 use mockall::automock;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread;
 use std::thread::JoinHandle;
-use log::{info, warn};
 
 pub struct InfluxConfig {
     url: String,

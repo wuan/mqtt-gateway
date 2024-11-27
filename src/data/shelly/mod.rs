@@ -12,11 +12,11 @@ use crate::WriteType;
 use anyhow::Result;
 use data::{CoverData, SwitchData};
 use influxdb::{Timestamp, WriteQuery};
+use log::{debug, warn};
 use paho_mqtt::Message;
 use regex::Regex;
 use serde::Deserialize;
 use std::thread::JoinHandle;
-use log::{debug, warn};
 
 pub trait Timestamped {
     fn timestamp(&self) -> Option<i64>;
