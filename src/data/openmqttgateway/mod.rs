@@ -103,7 +103,7 @@ impl OpenMqttGatewayParser {
                     }
                 }
 
-                if fields.contains_key("rssi") && fields.len() > 1 && tags.len() > base_tag_count {
+                if fields.contains_key("rssi") && fields.len() == 1 && tags.len() == base_tag_count {
                     tags.insert(String::from("type"),String::from("NONE"));
                 } else if !tags.contains_key("type") {
                     tags.insert(String::from("type"),String::from("UNKN"));
@@ -141,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_ignored() -> Result<()> {
+    fn test_parse_none_type() -> Result<()> {
         let mut parser = OpenMqttGatewayParser::new();
         let message = Message::new(
             "blegateway/D12331654712/BTtoMQTT/283146C17616",
@@ -150,7 +150,32 @@ mod tests {
         );
         let result = parser.parse(&message)?;
 
-        assert!(result.is_none());
+        assert!(result.is_some());
+        let data = result.unwrap();
+        let tags = data.tags;
+        assert_eq!(tags.get("device").unwrap(), "283146C17616");
+        assert_eq!(tags.get("gateway").unwrap(), "D12331654712");
+        assert_eq!(tags.get("type").unwrap(), "NONE");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_unknown_type() -> Result<()> {
+        let mut parser = OpenMqttGatewayParser::new();
+        let message = Message::new(
+            "blegateway/D12331654712/BTtoMQTT/283146C17616",
+            "{\"id\":\"28:31:46:C1:76:16\",\"rssi\":-92,\"name\":\"foo\"}",
+            QOS_1,
+        );
+        let result = parser.parse(&message)?;
+
+        assert!(result.is_some());
+        let data = result.unwrap();
+        let tags = data.tags;
+        assert_eq!(tags.get("device").unwrap(), "283146C17616");
+        assert_eq!(tags.get("gateway").unwrap(), "D12331654712");
+        assert_eq!(tags.get("type").unwrap(), "UNKN");
 
         Ok(())
     }
