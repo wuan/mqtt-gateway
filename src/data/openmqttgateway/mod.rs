@@ -86,6 +86,9 @@ impl OpenMqttGatewayParser {
                 let mut tags = HashMap::new();
                 tags.insert(String::from("device"), String::from(device_id));
                 tags.insert(String::from("gateway"), String::from(gateway_id));
+
+                let base_tag_count = tags.len();
+
                 for (key, value) in result {
                     match value {
                         Value::Number(value) => {
@@ -99,7 +102,10 @@ impl OpenMqttGatewayParser {
                         }
                     }
                 }
-                data = Some(Data { fields, tags });
+
+                if fields.contains_key("rssi") && fields.len() > 1 && tags.len() > base_tag_count {
+                    data = Some(Data { fields, tags });
+                }
             }
         }
         Ok(data)
@@ -127,6 +133,21 @@ mod tests {
         assert_eq!(tags.get("device").unwrap(), "283146C17616");
         assert_eq!(tags.get("gateway").unwrap(), "D12331654712");
         assert_eq!(tags.get("name").unwrap(), "DHS");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_ignored() -> Result<()> {
+        let mut parser = OpenMqttGatewayParser::new();
+        let message = Message::new(
+            "blegateway/D12331654712/BTtoMQTT/283146C17616",
+            "{\"id\":\"28:31:46:C1:76:16\",\"rssi\":-92}",
+            QOS_1,
+        );
+        let result = parser.parse(&message)?;
+
+        assert!(result.is_none());
 
         Ok(())
     }
