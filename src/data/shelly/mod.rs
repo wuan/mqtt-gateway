@@ -131,7 +131,12 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
 ) {
     let location = msg.topic().split("/").nth(1).unwrap();
     let channel = msg.topic().split(":").last().unwrap();
-    let result: Option<T> = shelly::parse(msg).unwrap();
+    let parse_result = shelly::parse(msg);
+    if parse_result.is_err() {
+        warn!("Shelly parse error: {:?} on '{}'", parse_result.err(), msg.payload_str());
+        return;
+    }
+    let result: Option<T> = parse_result.unwrap();
     if let Some(data) = result {
         debug!("Shelly {}:{}: {:?}", location, channel, data);
 
@@ -246,6 +251,25 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_handle_message_with_parse_error() -> Result<()> {
+        let (tx, rx) = sync_channel(100);
+        let txs = vec![tx];
+
+        let mut logger = ShellyLogger::new(txs);
+
+        let message = Message::new(
+            "shellies/bedroom-curtain/status/cover:0",
+            "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\
+                \"apower\":0.0}",
+            QOS_1,
+        );
+        logger.check_message(&message);
+
+        assert!(next(&rx).is_err());
+
+        Ok(())
+    }
     #[test]
     fn test_parse_switch_status() -> Result<()> {
         let message = Message::new("shellies/loo-fan/status/switch:0", "{\"id\":0, \"source\":\"timer\", \"output\":false, \"apower\":0.0, \"voltage\":226.5, \"current\":3.1, \"aenergy\":{\"total\":1094.865,\"by_minute\":[0.000,0.000,0.000],\"minute_ts\":1703415907},\"temperature\":{\"tC\":36.4, \"tF\":97.5}}", QOS_1);
