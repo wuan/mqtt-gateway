@@ -108,7 +108,11 @@ impl OpenMqttGatewayParser {
                 } else if !tags.contains_key("type") {
                     tags.insert(String::from("type"),String::from("UNKN"));
                 }
-                data = Some(Data { fields, tags });
+                if fields.len() > 0 {
+                    data = Some(Data { fields, tags });
+                } else {
+                    warn!("skip without fields {:?}", tags)
+                }
             }
         }
         Ok(data)
@@ -156,6 +160,21 @@ mod tests {
         assert_eq!(tags.get("device").unwrap(), "283146C17616");
         assert_eq!(tags.get("gateway").unwrap(), "D12331654712");
         assert_eq!(tags.get("type").unwrap(), "NONE");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_missing_fields() -> Result<()> {
+        let mut parser = OpenMqttGatewayParser::new();
+        let message = Message::new(
+            "blegateway/D12331654712/BTtoMQTT/283146C17616",
+            "{\"id\":\"28:31:46:C1:76:16\"}",
+            QOS_1,
+        );
+        let result = parser.parse(&message)?;
+
+        assert!(result.is_none());
 
         Ok(())
     }
