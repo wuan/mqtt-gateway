@@ -20,7 +20,7 @@ serde_yml = { version = "0.0.12", features = [] }
 anyhow = "^1.0"
 regex = "^1.11"
 async-trait = "0.1.85"
-log = "0.4.24"
+log = "0.4.25"
 
 [dev-dependencies]
 mockall = "^0.13"
