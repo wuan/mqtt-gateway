@@ -12,6 +12,7 @@ env:
 
 jobs:
   build:
+    container: debian:bookworm-slim
     runs-on: ubuntu-latest
     env:
       toolchain: stable
@@ -36,6 +37,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
+      - name: Setup build environment
+        run: |
+          apt update
+          apt upgrade -y
+          apt install -y curl build-essential gcc cmake pkg-config libssl-dev
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${{ env.toolchain }}
+          . "$HOME/.cargo/env"
+          cargo --version
+          rustc --version
+
       - name: Cache cargo build
         uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
         with:
@@ -44,20 +55,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-build-
 
-      - name: Install Rust
-        run: rustup update ${{ env.toolchain }} && rustup default ${{ env.toolchain }}
-
       - name: Install Cargo Tarpaulin
-        run: cargo install cargo-tarpaulin
+        run: |
+          . "$HOME/.cargo/env" 
+          cargo install cargo-tarpaulin
 
       - name: Build
-        run: cargo build --verbose
+        run: |
+          . "$HOME/.cargo/env"
+          cargo build
 
       - name: Run Tests with Coverage
-        run: cargo tarpaulin --out Xml
+        run: |
+          . "$HOME/.cargo/env" 
+          cargo tarpaulin --engine llvm --out Xml
 
       - name: Run Clippy
-        run: cargo clippy --message-format=json &> clippy.json
+        run: |
+          . "$HOME/.cargo/env" 
+          cargo clippy --message-format=json &> clippy.json
 
       - name: Update Sonar
         uses: sonarsource/sonarqube-scan-action@bfd4e558cda28cda6b5defafb9232d191be8c203 # v4.2.1
@@ -67,7 +83,9 @@ jobs:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
       - name: Build Release
-        run: cargo build --release
+        run: |
+          . "$HOME/.cargo/env" 
+          cargo build --release
 
       - name: Upload Release
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
