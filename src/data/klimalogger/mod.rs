@@ -44,6 +44,8 @@ impl SensorLogger {
     }
 }
 
+const MAX_TIME_OFFSET_SECONDS: i64 = 10;
+
 impl CheckMessage for SensorLogger {
     fn check_message(&mut self, msg: &Message) {
         let mut split = msg.topic().split("/");
@@ -57,24 +59,20 @@ impl CheckMessage for SensorLogger {
             let now = chrono::offset::Utc::now();
             let difference = now - date_time;
 
-            let has_high_time_offset = difference.num_seconds() > 10;
-            debug!(
-                "Sensor {} \"{}\": {:?} {:.2}s{}",
+            let log_message = format!(
+                "Sensor {} \"{}\": {:?} {:.2}s",
                 location,
                 measurement,
                 &result,
                 difference.num_milliseconds() as f32 / 1000.0,
-                if has_high_time_offset {
-                    " *** HIGH TIME OFFSET ***"
-                } else {
-                    ""
-                }
             );
 
-            if has_high_time_offset {
+            if difference.num_seconds() > MAX_TIME_OFFSET_SECONDS {
+                warn!("*** HIGH TIME OFFSET *** {}", log_message);
                 return;
             }
 
+            debug!("{}", log_message);
             let sensor_reading = SensorReading {
                 measurement: measurement.to_string(),
                 time: date_time,
