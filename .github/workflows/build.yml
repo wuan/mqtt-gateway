@@ -39,8 +39,11 @@ jobs:
 
       - name: Setup build environment
         run: |
+          cat /etc/debian_version
+          apt search glibc
           apt update
           apt upgrade -y
+          apt search glibc
           apt install -y curl build-essential gcc cmake pkg-config libssl-dev unzip
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${{ env.toolchain }}
           . "$HOME/.cargo/env"
