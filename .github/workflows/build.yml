@@ -63,7 +63,7 @@ jobs:
       - name: Build
         run: |
           . "$HOME/.cargo/env"
-          cargo build --verbose
+          cargo build
 
       - name: Run Tests with Coverage
         run: |
