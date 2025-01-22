@@ -41,7 +41,7 @@ jobs:
         run: |
           apt update
           apt upgrade -y
-          apt install -y curl build-essential gcc cmake pkg-config libssl-dev
+          apt install -y curl build-essential gcc cmake pkg-config libssl-dev unzip
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${{ env.toolchain }}
           . "$HOME/.cargo/env"
           cargo --version
