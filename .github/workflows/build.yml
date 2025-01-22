@@ -68,7 +68,7 @@ jobs:
       - name: Run Tests with Coverage
         run: |
           . "$HOME/.cargo/env" 
-          cargo tarpaulin --out Xml
+          cargo tarpaulin --engine llvm --out Xml
 
       - name: Run Clippy
         run: |
