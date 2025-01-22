@@ -12,6 +12,7 @@ env:
 
 jobs:
   build:
+    container: debian:bookworm
     runs-on: ubuntu-latest
     env:
       toolchain: stable
