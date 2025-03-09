@@ -91,7 +91,9 @@ fn influxdb_writer<T>(
                 }
             };
             let query = query_mapper(data);
+            info!("write to influx");
             let result = influx_client.query(query).await;
+            info!("done");
             match result {
                 Ok(_) => {}
                 Err(error) => {
