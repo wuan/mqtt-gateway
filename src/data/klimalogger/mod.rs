@@ -44,7 +44,7 @@ impl SensorLogger {
     }
 }
 
-const MAX_TIME_OFFSET_SECONDS: i64 = 10;
+const MAX_TIME_OFFSET_SECONDS: i64 = 60;
 
 impl CheckMessage for SensorLogger {
     fn check_message(&mut self, msg: &Message) {
@@ -68,8 +68,8 @@ impl CheckMessage for SensorLogger {
             );
 
             if difference.num_seconds() > MAX_TIME_OFFSET_SECONDS {
-                warn!("*** HIGH TIME OFFSET *** {}", log_message);
-                return;
+                warn!("*** HIGH TIME OFFSET *** {} : {} - {}", log_message, now, date_time);
+                //return;
             }
 
             debug!("{}", log_message);
