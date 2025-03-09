@@ -73,11 +73,11 @@ fn main() {
 
     if let Err(err) = block_on(async {
         // Get message stream before connecting.
-        let mut strm = mqtt_client.get_stream(200);
+        let mut strm = mqtt_client.get_stream(None);
 
         let conn_opts = mqtt::ConnectOptionsBuilder::new_v5()
             .keep_alive_interval(Duration::from_secs(30))
-            .clean_session(false)
+            .clean_session(true)
             .automatic_reconnect(Duration::from_secs(1), Duration::from_secs(300))
             .finalize();
 
@@ -91,6 +91,7 @@ fn main() {
         while let Some(msg_opt) = strm.next().await {
             if let Some(msg) = msg_opt {
                 let prefix = msg.topic().split("/").next().unwrap();
+                info!("received from {} - {}", msg.topic(), msg.payload_str());
 
                 let handler = handler_map.get(prefix);
                 if let Some(handler) = handler {
