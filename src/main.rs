@@ -3,7 +3,7 @@ use crate::data::{debug, openmqttgateway, CheckMessage};
 use chrono::{DateTime, Utc};
 use data::{klimalogger, opendtu, shelly};
 use futures::{executor::block_on, stream::StreamExt};
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use paho_mqtt as mqtt;
 use paho_mqtt::QOS_1;
 use std::collections::HashMap;
@@ -86,12 +86,12 @@ fn main() {
         info!("Subscribing to topics: {:?}", &topics);
         mqtt_client.subscribe_many(&topics, &qoss).await?;
 
-        info!("Waiting for messages...");
+        info!("Waiting for messages ...");
 
         while let Some(msg_opt) = strm.next().await {
             if let Some(msg) = msg_opt {
                 let prefix = msg.topic().split("/").next().unwrap();
-                info!("received from {} - {}", msg.topic(), msg.payload_str());
+                trace!("received from {} - {}", msg.topic(), msg.payload_str());
 
                 let handler = handler_map.get(prefix);
                 if let Some(handler) = handler {

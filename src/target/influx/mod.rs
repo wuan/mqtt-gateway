@@ -2,7 +2,7 @@ use async_trait::async_trait;
 //use anyhow::Result;
 use futures::executor::block_on;
 use influxdb::{Client, WriteQuery};
-use log::{info, warn};
+use log::{info, trace, warn};
 #[cfg(test)]
 use mockall::automock;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
@@ -91,9 +91,9 @@ fn influxdb_writer<T>(
                 }
             };
             let query = query_mapper(data);
-            info!("write to influx");
+            trace!("write to influx");
             let result = influx_client.query(query).await;
-            info!("done");
+            trace!("done");
             match result {
                 Ok(_) => {}
                 Err(error) => {
