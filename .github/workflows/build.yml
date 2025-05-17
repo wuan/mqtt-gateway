@@ -84,11 +84,9 @@ jobs:
           cargo clippy --message-format=json &> clippy.json
 
       - name: Update Sonar
-        uses: sonarsource/sonarqube-scan-action@2500896589ef8f7247069a56136f8dc177c27ccf # v5.2.0
-        if: github.ref == 'refs/heads/main'
+        uses: sonarsource/sonarqube-scan-action@v5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
       - name: Build Release
         run: |
