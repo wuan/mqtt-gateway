@@ -1,7 +1,7 @@
-[![Lines of Code](https://sonar.tryb.de/api/project_badges/measure?project=mqtt-gateway&metric=ncloc&token=sqb_dc05ae645d8c0daa80bfaf9959513149ce8572fe)](https://sonar.tryb.de/dashboard?id=mqtt-gateway)
-[![Duplicated Lines (%)](https://sonar.tryb.de/api/project_badges/measure?project=mqtt-gateway&metric=duplicated_lines_density&token=sqb_dc05ae645d8c0daa80bfaf9959513149ce8572fe)](https://sonar.tryb.de/dashboard?id=mqtt-gateway)
-[![Coverage](https://sonar.tryb.de/api/project_badges/measure?project=mqtt-gateway&metric=coverage&token=sqb_dc05ae645d8c0daa80bfaf9959513149ce8572fe)](https://sonar.tryb.de/dashboard?id=mqtt-gateway)
-[![Technical Debt](https://sonar.tryb.de/api/project_badges/measure?project=mqtt-gateway&metric=sqale_index&token=sqb_dc05ae645d8c0daa80bfaf9959513149ce8572fe)](https://sonar.tryb.de/dashboard?id=mqtt-gateway)
+[![Lines of Code](https://sonarcloud.io/api/project_badges/measure?project=wuan_mqtt-gateway&metric=ncloc)](https://sonarcloud.io/summary/new_code?id=wuan_mqtt-gateway)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=wuan_mqtt-gateway&metric=coverage)](https://sonarcloud.io/summary/new_code?id=wuan_mqtt-gateway)
+[![Duplicated Lines (%)](https://sonarcloud.io/api/project_badges/measure?project=wuan_mqtt-gateway&metric=duplicated_lines_density)](https://sonarcloud.io/summary/new_code?id=wuan_mqtt-gateway)
+[![Technical Debt](https://sonarcloud.io/api/project_badges/measure?project=wuan_mqtt-gateway&metric=sqale_index)](https://sonarcloud.io/summary/new_code?id=wuan_mqtt-gateway)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/wuan/mqtt-gateway/badge)](https://scorecard.dev/viewer/?uri=github.com/wuan/mqtt-gateway)
 
 # mqtt-gateway
