@@ -85,6 +85,7 @@ jobs:
 
       - name: Update Sonar
         uses: sonarsource/sonarqube-scan-action@v5
+        if: ${{ github.secret_source == 'Actions' }}
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
