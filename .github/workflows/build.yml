@@ -84,7 +84,7 @@ jobs:
           cargo clippy --message-format=json &> clippy.json
 
       - name: Update Sonar
-        uses: sonarsource/sonarqube-scan-action@v5
+        uses: sonarsource/sonarqube-scan-action@v6
         if: ${{ github.secret_source == 'Actions' }}
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
