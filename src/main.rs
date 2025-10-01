@@ -1,3 +1,5 @@
+extern crate core;
+
 use crate::config::SourceType;
 use crate::data::{debug, openmqttgateway, CheckMessage};
 use chrono::{DateTime, Utc};
@@ -13,6 +15,7 @@ use std::process::exit;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::{env, fs, time::Duration};
+use serde::{Deserialize, Serialize};
 
 mod config;
 mod data;
@@ -28,7 +31,9 @@ pub struct SensorReading {
     pub value: f32,
 }
 
-pub enum WriteType {
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum Number {
     Int(i32),
     Float(f32),
 }

@@ -2,15 +2,16 @@ use std::collections::HashMap;
 use std::sync::mpsc::SyncSender;
 
 use crate::config::Target;
-use crate::data::CheckMessage;
+use crate::data::{CheckMessage, LogEvent};
 use crate::target::influx;
 use crate::target::influx::InfluxConfig;
+use crate::Number;
 use anyhow::Result;
 use influxdb::Timestamp::Seconds;
 use influxdb::WriteQuery;
 use log::warn;
 use paho_mqtt::Message;
-use serde_json::{Map, Number, Value};
+use serde_json::{Map, Value};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -20,12 +21,12 @@ struct Data {
 }
 
 pub struct OpenMqttGatewayLogger {
-    txs: Vec<SyncSender<WriteQuery>>,
+    txs: Vec<SyncSender<LogEvent>>,
     parser: OpenMqttGatewayParser,
 }
 
 impl OpenMqttGatewayLogger {
-    pub(crate) fn new(txs: Vec<SyncSender<WriteQuery>>) -> Self {
+    pub(crate) fn new(txs: Vec<SyncSender<LogEvent>>) -> Self {
         OpenMqttGatewayLogger {
             txs,
             parser: OpenMqttGatewayParser::new(),
@@ -39,15 +40,20 @@ impl CheckMessage for OpenMqttGatewayLogger {
         if let Some(data) = data {
             let timestamp = chrono::offset::Utc::now();
 
-            let mut write_query = WriteQuery::new(Seconds(timestamp.timestamp() as u128), "btle");
-            for (key, value) in data.fields {
-                write_query = write_query.add_field(key, value.as_f64());
-            }
-            for (key, value) in data.tags {
-                write_query = write_query.add_tag(key, value);
-            }
+            let log_event = LogEvent::new(
+                "btle".to_string(),
+                timestamp.timestamp(),
+                data.tags
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect(),
+                data.fields
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.clone()))
+                    .collect(),
+            );
             for tx in &self.txs {
-                tx.send(write_query.clone()).expect("failed to send");
+                tx.send(log_event.clone()).expect("failed to send");
             }
         }
     }
@@ -91,8 +97,13 @@ impl OpenMqttGatewayParser {
 
                 for (key, value) in result {
                     match value {
-                        Value::Number(value) => {
-                            fields.insert(key, value);
+                        Value::Number(number) => {
+                            let number_value = if (number.is_f64()) {
+                                Number::Float(number.as_f64().unwrap() as f32)
+                            } else {
+                                Number::Int(number.as_i64().unwrap() as i32)
+                            };
+                            fields.insert(key, number_value);
                         }
                         Value::String(value) => {
                             tags.insert(key, value);
@@ -103,10 +114,11 @@ impl OpenMqttGatewayParser {
                     }
                 }
 
-                if fields.contains_key("rssi") && fields.len() == 1 && tags.len() == base_tag_count {
-                    tags.insert(String::from("type"),String::from("NONE"));
+                if fields.contains_key("rssi") && fields.len() == 1 && tags.len() == base_tag_count
+                {
+                    tags.insert(String::from("type"), String::from("NONE"));
                 } else if !tags.contains_key("type") {
-                    tags.insert(String::from("type"),String::from("UNKN"));
+                    tags.insert(String::from("type"), String::from("UNKN"));
                 }
                 if fields.len() > 0 {
                     data = Some(Data { fields, tags });
@@ -134,8 +146,8 @@ mod tests {
         assert!(result.is_some());
         let data = result.unwrap();
         let fields = data.fields;
-        assert_eq!(fields.get("rssi").unwrap().as_f64().unwrap(), -92f64);
-        assert_eq!(fields.get("seconds").unwrap().as_f64().unwrap(), 115f64);
+        assert_eq!(*fields.get("rssi").unwrap(), Number::Int(-92));
+        assert_eq!(*fields.get("seconds").unwrap(), Number::Int(115));
         let tags = data.tags;
         assert_eq!(tags.get("device").unwrap(), "283146C17616");
         assert_eq!(tags.get("gateway").unwrap(), "D12331654712");
@@ -201,7 +213,7 @@ mod tests {
 }
 
 pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>) {
-    let mut txs: Vec<SyncSender<WriteQuery>> = Vec::new();
+    let mut txs: Vec<SyncSender<LogEvent>> = Vec::new();
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
     for target in targets {

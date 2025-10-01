@@ -1,3 +1,4 @@
+use crate::Number;
 use paho_mqtt::Message;
 use serde::{Deserialize, Serialize};
 
@@ -7,17 +8,46 @@ pub(crate) mod opendtu;
 pub(crate) mod openmqttgateway;
 pub(crate) mod shelly;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LogEvent {
-    host: String,
-    location: String,
-    #[serde(rename = "type")]
-    measurement_type: String,
-    unit: String,
-    sensor: String,
-    calculated: bool,
-    time: String,
-    value: f64,
+    pub measurement: String,
+    pub timestamp: i64,
+    pub tags: Vec<(String, String)>,
+    pub fields: Vec<(String, Number)>,
+}
+
+impl LogEvent {
+    pub(crate) fn new_value(
+        measurement: String,
+        timestamp: i64,
+        tags: Vec<(&str, &str)>,
+        value: Number,
+    ) -> Self {
+        Self::new(measurement, timestamp, tags, vec![("value", value)])
+    }
+
+    pub(crate) fn new(
+        measurement: String,
+        timestamp: i64,
+        tags: Vec<(&str, &str)>,
+        fields: Vec<(&str, Number)>,
+    ) -> Self {
+        let tags: Vec<(String, String)> = tags
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let fields: Vec<(String, Number)> = fields
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+
+        Self {
+            measurement,
+            timestamp,
+            tags,
+            fields,
+        }
+    }
 }
 
 pub trait CheckMessage {

@@ -1,13 +1,15 @@
 use async_trait::async_trait;
 //use anyhow::Result;
 use futures::executor::block_on;
-use influxdb::{Client, WriteQuery};
+use influxdb::{Client, Timestamp, WriteQuery};
 use log::{info, trace, warn};
 #[cfg(test)]
 use mockall::automock;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread;
 use std::thread::JoinHandle;
+use crate::data::LogEvent;
+use crate::Number;
 
 pub struct InfluxConfig {
     url: String,
@@ -73,7 +75,7 @@ fn influxdb_writer<T>(
     rx: Receiver<T>,
     influx_client: Box<dyn InfluxClient>,
     influx_config: InfluxConfig,
-    query_mapper: fn(T) -> WriteQuery,
+    query_mapper: fn(T) -> LogEvent,
 ) {
     block_on(async move {
         info!(
@@ -90,7 +92,7 @@ fn influxdb_writer<T>(
                     break;
                 }
             };
-            let query = query_mapper(data);
+            let query = map_to_point(query_mapper(data));
             trace!("write to influx");
             let result = influx_client.query(query).await;
             trace!("done");
@@ -112,7 +114,7 @@ fn influxdb_writer<T>(
 
 pub fn spawn_influxdb_writer<T: Send + 'static>(
     influx_config: InfluxConfig,
-    query_mapper: fn(T) -> WriteQuery,
+    query_mapper: fn(T) -> LogEvent,
 ) -> (SyncSender<T>, JoinHandle<()>) {
     let influx_client =
         create_influxdb_client(&influx_config).expect("could not create influxdb client");
@@ -122,7 +124,7 @@ pub fn spawn_influxdb_writer<T: Send + 'static>(
 fn spawn_influxdb_writer_internal<T: Send + 'static>(
     influx_client: Box<dyn InfluxClient>,
     influx_config: InfluxConfig,
-    query_mapper: fn(T) -> WriteQuery,
+    query_mapper: fn(T) -> LogEvent,
 ) -> (SyncSender<T>, JoinHandle<()>) {
     let (tx, rx) = sync_channel(100);
 
@@ -139,20 +141,42 @@ fn spawn_influxdb_writer_internal<T: Send + 'static>(
     )
 }
 
+pub fn map_to_point(log_event: LogEvent) -> WriteQuery {
+    let mut write_query = WriteQuery::new(Timestamp::Seconds(log_event.timestamp as u128), log_event.measurement);
+    for (tag, value) in log_event.tags {
+       write_query = write_query.add_tag(tag, value);
+    }
+    for (name, value) in log_event.fields {
+        match value {
+            Number::Int(value) => {
+                write_query = write_query.add_field(name, value);
+            }
+            Number::Float(value) => {
+                write_query = write_query.add_field(name, value);
+            }
+        }
+    }
+    write_query
+
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use super::*;
     use influxdb::Timestamp::Seconds;
+    use crate::Number;
 
     // A mock `WriteQuery` for testing purposes
-    fn mock_write_query(data: String) -> WriteQuery {
+    fn mock_write_query(data: String) -> LogEvent {
         info!("mock write query {}", data);
 
         assert_eq!(data, "test_data");
 
-        let current_timestamp = Seconds(chrono::Utc::now().timestamp() as u128);
-        WriteQuery::new(current_timestamp, "measurement")
-            .add_field("field", influxdb::Type::Float(1.23))
+        let current_timestamp = chrono::Utc::now().timestamp();
+        LogEvent::new_value(
+            "measurement".to_string(), current_timestamp, vec![], Number::Float(1.23)
+        )
     }
 
     //

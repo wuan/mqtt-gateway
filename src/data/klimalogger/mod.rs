@@ -2,11 +2,11 @@ use std::fmt;
 use std::sync::mpsc::SyncSender;
 
 use crate::config::Target;
-use crate::data::CheckMessage;
+use crate::data::{CheckMessage, LogEvent};
 use crate::target::influx;
 use crate::target::influx::InfluxConfig;
 use crate::target::postgres::PostgresConfig;
-use crate::{target, SensorReading};
+use crate::{target, Number, SensorReading};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use influxdb::{Timestamp, WriteQuery};
@@ -68,7 +68,10 @@ impl CheckMessage for SensorLogger {
             );
 
             if difference.num_seconds() > MAX_TIME_OFFSET_SECONDS {
-                warn!("*** HIGH TIME OFFSET *** {} : {} - {}", log_message, now, date_time);
+                warn!(
+                    "*** HIGH TIME OFFSET *** {} : {} - {}",
+                    log_message, now, date_time
+                );
                 return;
             }
 
@@ -192,12 +195,16 @@ pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec
                 user,
                 password,
             } => {
-                fn mapper(result: SensorReading) -> WriteQuery {
-                    let timestamp = Timestamp::Seconds(result.time.timestamp() as u128);
-                    WriteQuery::new(timestamp, result.measurement.to_string())
-                        .add_tag("location", result.location.to_string())
-                        .add_tag("sensor", result.sensor.to_string())
-                        .add_field("value", result.value)
+                fn mapper(result: SensorReading) -> LogEvent {
+                    let tags: Vec<(&str, &str)> =
+                        vec![("location", &result.location), ("sensor", &result.sensor)];
+
+                    LogEvent::new_value(
+                        result.measurement,
+                        result.time.timestamp(),
+                        tags,
+                        Number::Float(result.value),
+                    )
                 }
 
                 influx::spawn_influxdb_writer(
