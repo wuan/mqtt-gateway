@@ -92,7 +92,7 @@ jobs:
 
       - name: Update Sonar
         uses: sonarsource/sonarqube-scan-action@v6
-        if: ${{ github.secret_source == 'Actions' }}
+        if: github.secret_source == 'Actions'
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
@@ -116,7 +116,6 @@ jobs:
   #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
   docker-image:
     runs-on: ubuntu-latest
-    if:
     needs: build
     env:
       REGISTRY: ghcr.io
