@@ -1,5 +1,7 @@
-use async_trait::async_trait;
 //use anyhow::Result;
+use crate::data::LogEvent;
+use crate::Number;
+use async_trait::async_trait;
 use futures::executor::block_on;
 use influxdb::{Client, Timestamp, WriteQuery};
 use log::{info, trace, warn};
@@ -8,8 +10,6 @@ use mockall::automock;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread;
 use std::thread::JoinHandle;
-use crate::data::LogEvent;
-use crate::Number;
 
 pub struct InfluxConfig {
     url: String,
@@ -142,9 +142,12 @@ fn spawn_influxdb_writer_internal<T: Send + 'static>(
 }
 
 pub fn map_to_point(log_event: LogEvent) -> WriteQuery {
-    let mut write_query = WriteQuery::new(Timestamp::Seconds(log_event.timestamp as u128), log_event.measurement);
+    let mut write_query = WriteQuery::new(
+        Timestamp::Seconds(log_event.timestamp as u128),
+        log_event.measurement,
+    );
     for (tag, value) in log_event.tags {
-       write_query = write_query.add_tag(tag, value);
+        write_query = write_query.add_tag(tag, value);
     }
     for (name, value) in log_event.fields {
         match value {
@@ -157,14 +160,11 @@ pub fn map_to_point(log_event: LogEvent) -> WriteQuery {
         }
     }
     write_query
-
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use super::*;
-    use influxdb::Timestamp::Seconds;
     use crate::Number;
 
     // A mock `WriteQuery` for testing purposes
@@ -174,8 +174,11 @@ mod tests {
         assert_eq!(data, "test_data");
 
         let current_timestamp = chrono::Utc::now().timestamp();
-        LogEvent::new_value(
-            "measurement".to_string(), current_timestamp, vec![], Number::Float(1.23)
+        LogEvent::new_value_from_ref(
+            "measurement".to_string(),
+            current_timestamp,
+            vec![],
+            Number::Float(1.23),
         )
     }
 

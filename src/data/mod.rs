@@ -17,16 +17,16 @@ pub struct LogEvent {
 }
 
 impl LogEvent {
-    pub(crate) fn new_value(
+    pub(crate) fn new_value_from_ref(
         measurement: String,
         timestamp: i64,
         tags: Vec<(&str, &str)>,
         value: Number,
     ) -> Self {
-        Self::new(measurement, timestamp, tags, vec![("value", value)])
+        Self::new_from_ref(measurement, timestamp, tags, vec![("value", value)])
     }
 
-    pub(crate) fn new(
+    pub(crate) fn new_from_ref(
         measurement: String,
         timestamp: i64,
         tags: Vec<(&str, &str)>,
@@ -41,6 +41,15 @@ impl LogEvent {
             .map(|(k, v)| (k.to_string(), v))
             .collect();
 
+        Self::new(measurement, timestamp, tags, fields)
+    }
+
+    pub(crate) fn new(
+        measurement: String,
+        timestamp: i64,
+        tags: Vec<(String, String)>,
+        fields: Vec<(String, Number)>,
+    ) -> Self {
         Self {
             measurement,
             timestamp,

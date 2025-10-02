@@ -1,6 +1,5 @@
 mod data;
 
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -12,7 +11,6 @@ use crate::target::influx::InfluxConfig;
 use crate::Number;
 use anyhow::Result;
 use data::{CoverData, SwitchData};
-use influxdb::{Timestamp, WriteQuery};
 use log::{debug, warn};
 use paho_mqtt::Message;
 use regex::Regex;
@@ -134,7 +132,12 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
     let channel = msg.topic().split(":").last().unwrap();
     let parse_result = shelly::parse(msg);
     if parse_result.is_err() {
-        warn!("Shelly parse error: {:?} on '{}' (topic: {})", parse_result.err(), msg.payload_str(), msg.topic());
+        warn!(
+            "Shelly parse error: {:?} on '{}' (topic: {})",
+            parse_result.err(),
+            msg.payload_str(),
+            msg.topic()
+        );
         return;
     }
     let result: Option<T> = parse_result.unwrap();
@@ -142,15 +145,8 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
         debug!("Shelly {}:{}: {:?}", location, channel, data);
 
         if let Some(minute_ts) = data.timestamp() {
-            let timestamp = Timestamp::Seconds(minute_ts as u128);
             for (measurement, value, unit) in fields {
-                let query = WriteQuery::new(timestamp, *measurement);
                 if let Some(result) = value(&data) {
-                    let query = match result {
-                        Number::Int(i) => query.add_field("value", i),
-                        Number::Float(f) => query.add_field("value", f),
-                    };
-
                     let tags_vec = vec![
                         ("location", location),
                         ("channel", channel),
@@ -158,7 +154,12 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
                         ("type", data.type_name()),
                         ("unit", unit),
                     ];
-                    let log_event = LogEvent::new_value(measurement.to_string(), minute_ts, tags_vec, result);
+                    let log_event = LogEvent::new_value_from_ref(
+                        measurement.to_string(),
+                        minute_ts,
+                        tags_vec,
+                        result,
+                    );
 
                     for tx in txs {
                         tx.send(log_event.clone()).expect("failed to send");
@@ -174,11 +175,11 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::target::influx::map_to_point;
     use influxdb::Query;
     use paho_mqtt::QOS_1;
     use std::sync::mpsc::{sync_channel, Receiver};
     use std::time::Duration;
-    use crate::target::influx::map_to_point;
 
     fn next(rx: &Receiver<LogEvent>) -> Result<String> {
         let result = rx.recv_timeout(Duration::from_micros(100))?;

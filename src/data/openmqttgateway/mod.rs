@@ -7,8 +7,6 @@ use crate::target::influx;
 use crate::target::influx::InfluxConfig;
 use crate::Number;
 use anyhow::Result;
-use influxdb::Timestamp::Seconds;
-use influxdb::WriteQuery;
 use log::warn;
 use paho_mqtt::Message;
 use serde_json::{Map, Value};
@@ -45,11 +43,11 @@ impl CheckMessage for OpenMqttGatewayLogger {
                 timestamp.timestamp(),
                 data.tags
                     .iter()
-                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
                 data.fields
                     .iter()
-                    .map(|(k, v)| (k.as_str(), v.clone()))
+                    .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
             );
             for tx in &self.txs {
@@ -98,7 +96,7 @@ impl OpenMqttGatewayParser {
                 for (key, value) in result {
                     match value {
                         Value::Number(number) => {
-                            let number_value = if (number.is_f64()) {
+                            let number_value = if number.is_f64() {
                                 Number::Float(number.as_f64().unwrap() as f32)
                             } else {
                                 Number::Int(number.as_i64().unwrap() as i32)

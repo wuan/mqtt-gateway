@@ -7,8 +7,6 @@ use crate::target::influx::InfluxConfig;
 use crate::Number;
 use anyhow::Result;
 use chrono::Datelike;
-use influxdb::Timestamp::Seconds;
-use influxdb::WriteQuery;
 use log::{debug, trace};
 use paho_mqtt::Message;
 use std::sync::{Arc, Mutex};
@@ -59,7 +57,7 @@ impl CheckMessage for OpenDTULogger {
                 tags.push(("string", string));
             }
 
-            let log_event = LogEvent::new_value(
+            let log_event = LogEvent::new_value_from_ref(
                 data.field,
                 data.timestamp,
                 tags,

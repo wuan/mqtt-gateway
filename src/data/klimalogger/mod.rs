@@ -9,7 +9,6 @@ use crate::target::postgres::PostgresConfig;
 use crate::{target, Number, SensorReading};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use influxdb::{Timestamp, WriteQuery};
 use log::{debug, warn};
 use paho_mqtt::Message;
 use serde::{Deserialize, Serialize};
@@ -199,7 +198,7 @@ pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec
                     let tags: Vec<(&str, &str)> =
                         vec![("location", &result.location), ("sensor", &result.sensor)];
 
-                    LogEvent::new_value(
+                    LogEvent::new_value_from_ref(
                         result.measurement,
                         result.time.timestamp(),
                         tags,
