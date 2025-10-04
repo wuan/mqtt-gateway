@@ -19,7 +19,7 @@ use std::thread::JoinHandle;
 pub struct Data {
     #[serde(rename = "time")]
     pub(crate) timestamp: i32,
-    pub(crate) value: f32,
+    pub(crate) value: f64,
     pub(crate) sensor: String,
 }
 
@@ -182,7 +182,7 @@ mod tests {
     }
 }
 
-pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>) {
+pub fn create_logger(targets: Vec<Target>) -> anyhow::Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
     let mut txs: Vec<SyncSender<SensorReading>> = Vec::new();
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
@@ -201,13 +201,13 @@ pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec
                     LogEvent::new_value_from_ref(
                         result.measurement,
                         result.time.timestamp(),
-                        tags,
+                        tags.into_iter().collect(),
                         Number::Float(result.value),
                     )
                 }
 
                 influx::spawn_influxdb_writer(
-                    InfluxConfig::new(url, database, user, password),
+                    InfluxConfig::new(url, database, user, password)?,
                     mapper,
                 )
             }
@@ -225,5 +225,5 @@ pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec
         handles.push(handle);
     }
 
-    (Arc::new(Mutex::new(SensorLogger::new(txs))), handles)
+    Ok((Arc::new(Mutex::new(SensorLogger::new(txs))), handles))
 }

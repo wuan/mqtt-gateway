@@ -3,16 +3,17 @@ use crate::data::LogEvent;
 use crate::Number;
 use async_trait::async_trait;
 use futures::executor::block_on;
-use influxdb::{Client, Timestamp, WriteQuery};
+use influx_db_client::{points, Client, Point, Points, Precision};
 use log::{info, trace, warn};
 #[cfg(test)]
 use mockall::automock;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread;
 use std::thread::JoinHandle;
+use url::Url;
 
 pub struct InfluxConfig {
-    url: String,
+    url: Url,
     database: String,
     user: Option<String>,
     password: Option<String>,
@@ -24,13 +25,13 @@ impl InfluxConfig {
         database: String,
         user: Option<String>,
         password: Option<String>,
-    ) -> Self {
-        Self {
-            url,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            url: Url::parse(&url)?,
             database,
             user,
             password,
-        }
+        })
     }
 }
 
@@ -47,13 +48,15 @@ impl DefaultInfluxClient {
 #[cfg_attr(test, automock)]
 #[async_trait]
 trait InfluxClient: Sync + Send {
-    async fn query(&self, write_query: WriteQuery) -> Result<String, influxdb::Error>;
+    async fn write(&self, points: Points) -> Result<(), influx_db_client::Error>;
 }
 
 #[async_trait]
 impl InfluxClient for DefaultInfluxClient {
-    async fn query(&self, write_query: WriteQuery) -> Result<String, influxdb::Error> {
-        self.client.query(write_query).await
+    async fn write(&self, write_query: Points) -> Result<(), influx_db_client::Error> {
+        self.client
+            .write_points(write_query, Some(Precision::Seconds), None)
+            .await
     }
 }
 
@@ -63,7 +66,7 @@ fn create_influxdb_client(influx_config: &InfluxConfig) -> anyhow::Result<Box<dy
     influx_client = if let (Some(user), Some(password)) =
         (influx_config.user.clone(), influx_config.password.clone())
     {
-        influx_client.with_auth(user, password)
+        influx_client.set_authentication(user, password)
     } else {
         influx_client
     };
@@ -94,7 +97,7 @@ fn influxdb_writer<T>(
             };
             let query = map_to_point(query_mapper(data));
             trace!("write to influx");
-            let result = influx_client.query(query).await;
+            let result = influx_client.write(points!(query)).await;
             trace!("done");
             match result {
                 Ok(_) => {}
@@ -141,11 +144,9 @@ fn spawn_influxdb_writer_internal<T: Send + 'static>(
     )
 }
 
-pub fn map_to_point(log_event: LogEvent) -> WriteQuery {
-    let mut write_query = WriteQuery::new(
-        Timestamp::Seconds(log_event.timestamp as u128),
-        log_event.measurement,
-    );
+pub fn map_to_point(log_event: LogEvent) -> Point {
+    let mut write_query = Point::new(&log_event.measurement);
+    write_query.timestamp = Some(log_event.timestamp);
     for (tag, value) in log_event.tags {
         write_query = write_query.add_tag(tag, value);
     }
@@ -177,7 +178,7 @@ mod tests {
         LogEvent::new_value_from_ref(
             "measurement".to_string(),
             current_timestamp,
-            vec![],
+            vec![].into_iter().collect(),
             Number::Float(1.23),
         )
     }
@@ -190,13 +191,10 @@ mod tests {
             "test_db".to_string(),
             Some("user".to_string()),
             Some("password".to_string()),
-        );
+        )?;
 
         let mut mock_client = Box::new(MockInfluxClient::new());
-        mock_client
-            .expect_query()
-            .times(1)
-            .returning(|_| Ok("Success".to_string()));
+        mock_client.expect_write().times(1).returning(|_| Ok(()));
 
         // Run the `influxdb_writer` function
         let (tx, join_handle) =

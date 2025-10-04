@@ -1,6 +1,7 @@
 use crate::Number;
 use paho_mqtt::Message;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 pub(crate) mod debug;
 pub(crate) mod klimalogger;
@@ -12,31 +13,33 @@ pub(crate) mod shelly;
 pub struct LogEvent {
     pub measurement: String,
     pub timestamp: i64,
-    pub tags: Vec<(String, String)>,
-    pub fields: Vec<(String, Number)>,
+    pub tags: HashMap<String, String>,
+    pub fields: HashMap<String, Number>,
 }
 
 impl LogEvent {
     pub(crate) fn new_value_from_ref(
         measurement: String,
         timestamp: i64,
-        tags: Vec<(&str, &str)>,
+        tags: HashMap<&str, &str>,
         value: Number,
     ) -> Self {
-        Self::new_from_ref(measurement, timestamp, tags, vec![("value", value)])
+        let mut fields = HashMap::new();
+        fields.insert("value", value);
+        Self::new_from_ref(measurement, timestamp, tags, fields)
     }
 
     pub(crate) fn new_from_ref(
         measurement: String,
         timestamp: i64,
-        tags: Vec<(&str, &str)>,
-        fields: Vec<(&str, Number)>,
+        tags: HashMap<&str, &str>,
+        fields: HashMap<&str, Number>,
     ) -> Self {
-        let tags: Vec<(String, String)> = tags
+        let tags = tags
             .into_iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        let fields: Vec<(String, Number)> = fields
+        let fields = fields
             .into_iter()
             .map(|(k, v)| (k.to_string(), v))
             .collect();
@@ -47,8 +50,8 @@ impl LogEvent {
     pub(crate) fn new(
         measurement: String,
         timestamp: i64,
-        tags: Vec<(String, String)>,
-        fields: Vec<(String, Number)>,
+        tags: HashMap<String, String>,
+        fields: HashMap<String, Number>,
     ) -> Self {
         Self {
             measurement,

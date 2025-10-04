@@ -44,7 +44,7 @@ impl CheckMessage for OpenDTULogger {
             let month_string = timestamp.month().to_string();
             let year_string = timestamp.year().to_string();
             let year_month_string = format!("{:04}-{:02}", timestamp.year(), timestamp.month());
-
+            
             let mut tags: Vec<(&str, &str)> = vec![
                 ("device", &data.device),
                 ("component", &data.component),
@@ -60,8 +60,8 @@ impl CheckMessage for OpenDTULogger {
             let log_event = LogEvent::new_value_from_ref(
                 data.field,
                 data.timestamp,
-                tags,
-                Number::Float(data.value as f32),
+                tags.into_iter().collect(),
+                Number::Float(data.value),
             );
             for tx in &self.txs {
                 tx.send(log_event.clone()).expect("failed to send");
@@ -205,7 +205,7 @@ mod tests {
     }
 }
 
-pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>) {
+pub fn create_logger(targets: Vec<Target>) -> anyhow::Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
     let mut txs: Vec<SyncSender<LogEvent>> = Vec::new();
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
@@ -217,7 +217,7 @@ pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec
                 user,
                 password,
             } => influx::spawn_influxdb_writer(
-                InfluxConfig::new(url, database, user, password),
+                InfluxConfig::new(url, database, user, password)?,
                 std::convert::identity,
             ),
             Target::Postgresql { .. } => {
@@ -230,5 +230,5 @@ pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec
 
     let logger = OpenDTULogger::new(txs);
 
-    (Arc::new(Mutex::new(logger)), handles)
+    Ok((Arc::new(Mutex::new(logger)), handles))
 }

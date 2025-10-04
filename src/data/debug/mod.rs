@@ -23,10 +23,10 @@ impl CheckMessage for DebugLogger {
     }
 }
 
-pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>) {
+pub fn create_logger(targets: Vec<Target>) -> anyhow::Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
     if targets.len() > 0 {
         warn!("debug type has targets defined: {:?}", &targets);
     }
 
-    (Arc::new(Mutex::new(DebugLogger::new())), Vec::new())
+    Ok((Arc::new(Mutex::new(DebugLogger::new())), Vec::new()))
 }

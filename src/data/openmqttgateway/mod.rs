@@ -97,9 +97,9 @@ impl OpenMqttGatewayParser {
                     match value {
                         Value::Number(number) => {
                             let number_value = if number.is_f64() {
-                                Number::Float(number.as_f64().unwrap() as f32)
+                                Number::Float(number.as_f64().unwrap())
                             } else {
-                                Number::Int(number.as_i64().unwrap() as i32)
+                                Number::Int(number.as_i64().unwrap())
                             };
                             fields.insert(key, number_value);
                         }
@@ -210,7 +210,7 @@ mod tests {
     }
 }
 
-pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>) {
+pub fn create_logger(targets: Vec<Target>) -> anyhow::Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
     let mut txs: Vec<SyncSender<LogEvent>> = Vec::new();
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
@@ -222,7 +222,7 @@ pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec
                 user,
                 password,
             } => influx::spawn_influxdb_writer(
-                InfluxConfig::new(url, database, user, password),
+                InfluxConfig::new(url, database, user, password)?,
                 std::convert::identity,
             ),
             Target::Postgresql { .. } => {
@@ -235,5 +235,5 @@ pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec
 
     let logger = OpenMqttGatewayLogger::new(txs);
 
-    (Arc::new(Mutex::new(logger)), handles)
+    Ok((Arc::new(Mutex::new(logger)), handles))
 }
