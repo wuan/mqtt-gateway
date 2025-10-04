@@ -1,13 +1,12 @@
 use std::sync::mpsc::SyncSender;
 
 use crate::config::Target;
-use crate::data::CheckMessage;
+use crate::data::{CheckMessage, LogEvent};
 use crate::target::influx;
 use crate::target::influx::InfluxConfig;
+use crate::Number;
 use anyhow::Result;
 use chrono::Datelike;
-use influxdb::Timestamp::Seconds;
-use influxdb::WriteQuery;
 use log::{debug, trace};
 use paho_mqtt::Message;
 use std::sync::{Arc, Mutex};
@@ -23,12 +22,12 @@ struct Data {
 }
 
 pub struct OpenDTULogger {
-    txs: Vec<SyncSender<WriteQuery>>,
+    txs: Vec<SyncSender<LogEvent>>,
     parser: OpenDTUParser,
 }
 
 impl OpenDTULogger {
-    pub(crate) fn new(txs: Vec<SyncSender<WriteQuery>>) -> Self {
+    pub(crate) fn new(txs: Vec<SyncSender<LogEvent>>) -> Self {
         OpenDTULogger {
             txs,
             parser: OpenDTUParser::new(),
@@ -42,22 +41,30 @@ impl CheckMessage for OpenDTULogger {
         if let Some(data) = result1 {
             let timestamp = chrono::DateTime::from_timestamp(data.timestamp, 0)
                 .expect("failed to convert timestamp");
-            let month_string = format!("{:04}-{:02}", timestamp.year(), timestamp.month());
-            let mut write_query = WriteQuery::new(Seconds(data.timestamp as u128), data.field)
-                .add_tag("device", data.device)
-                .add_tag("component", data.component)
-                .add_field("value", data.value)
-                .add_tag("month", timestamp.month())
-                .add_tag("year", timestamp.year())
-                .add_tag("year_month", month_string);
+            let month_string = timestamp.month().to_string();
+            let year_string = timestamp.year().to_string();
+            let year_month_string = format!("{:04}-{:02}", timestamp.year(), timestamp.month());
+            
+            let mut tags: Vec<(&str, &str)> = vec![
+                ("device", &data.device),
+                ("component", &data.component),
+                ("month", &month_string),
+                ("year", &year_string),
+                ("year_month", &year_month_string),
+            ];
 
-            write_query = if let Some(string) = data.string {
-                write_query.add_tag("string", string)
-            } else {
-                write_query
-            };
+            if let Some(ref string) = data.string {
+                tags.push(("string", string));
+            }
+
+            let log_event = LogEvent::new_value_from_ref(
+                data.field,
+                data.timestamp,
+                tags.into_iter().collect(),
+                Number::Float(data.value),
+            );
             for tx in &self.txs {
-                tx.send(write_query.clone()).expect("failed to send");
+                tx.send(log_event.clone()).expect("failed to send");
             }
         }
     }
@@ -198,8 +205,8 @@ mod tests {
     }
 }
 
-pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>) {
-    let mut txs: Vec<SyncSender<WriteQuery>> = Vec::new();
+pub fn create_logger(targets: Vec<Target>) -> anyhow::Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
+    let mut txs: Vec<SyncSender<LogEvent>> = Vec::new();
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
     for target in targets {
@@ -210,7 +217,7 @@ pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec
                 user,
                 password,
             } => influx::spawn_influxdb_writer(
-                InfluxConfig::new(url, database, user, password),
+                InfluxConfig::new(url, database, user, password)?,
                 std::convert::identity,
             ),
             Target::Postgresql { .. } => {
@@ -223,5 +230,5 @@ pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec
 
     let logger = OpenDTULogger::new(txs);
 
-    (Arc::new(Mutex::new(logger)), handles)
+    Ok((Arc::new(Mutex::new(logger)), handles))
 }

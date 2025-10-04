@@ -1,3 +1,5 @@
+extern crate core;
+
 use crate::config::SourceType;
 use crate::data::{debug, openmqttgateway, CheckMessage};
 use chrono::{DateTime, Utc};
@@ -13,6 +15,8 @@ use std::process::exit;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::{env, fs, time::Duration};
+use anyhow::anyhow;
+use serde::{Deserialize, Serialize};
 
 mod config;
 mod data;
@@ -25,15 +29,17 @@ pub struct SensorReading {
     pub time: DateTime<Utc>,
     pub location: String,
     pub sensor: String,
-    pub value: f32,
+    pub value: f64,
 }
 
-pub enum WriteType {
-    Int(i32),
-    Float(f32),
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum Number {
+    Int(i64),
+    Float(f64),
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     if env::var("RUST_LOG").is_err() {
         env::set_var("RUST_LOG", "info")
     }
@@ -55,13 +61,13 @@ fn main() {
 
     for source in config.sources {
         let targets = source.targets.unwrap_or_default();
-        let (logger, mut source_handles) = match source.source_type {
+        let (logger, mut source_handles) = (match source.source_type {
             SourceType::Shelly => shelly::create_logger(targets),
             SourceType::Sensor => klimalogger::create_logger(targets),
             SourceType::OpenDTU => opendtu::create_logger(targets),
             SourceType::OpenMqttGateway => openmqttgateway::create_logger(targets),
             SourceType::Debug => debug::create_logger(targets),
-        };
+        })?;
         handler_map.insert(source.prefix.clone(), logger);
         handles.append(&mut source_handles);
 
@@ -121,6 +127,9 @@ fn main() {
         Ok::<(), mqtt::Error>(())
     }) {
         error!("{}", err);
+        Err(anyhow!(err))
+    } else {
+        Ok(())
     }
 }
 
