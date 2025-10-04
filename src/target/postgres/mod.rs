@@ -7,7 +7,6 @@ use postgres::types::ToSql;
 use postgres::Client;
 use postgres::{Error, NoTls};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::thread;
 use tokio::task::JoinHandle;
 
 pub struct PostgresConfig {
@@ -139,8 +138,8 @@ pub fn spawn_postgres_writer_internal(
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_postgres_writer_internal() -> anyhow::Result<()> {
+    #[tokio::test]
+    async fn test_postgres_writer_internal() -> anyhow::Result<()> {
         let sensor_reading = SensorReading {
             measurement: "measurement".to_string(),
             time: chrono::Utc::now(),
@@ -167,8 +166,8 @@ mod tests {
         tx.send(sensor_reading).unwrap();
 
         drop(tx);
-
-        let _ = join_handle.join();
+        
+        let _ = join_handle.await;
 
         Ok(())
     }

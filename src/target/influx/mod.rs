@@ -74,6 +74,7 @@ async fn influxdb_writer<T>(
     influx_config: InfluxConfig,
     query_mapper: fn(T) -> WriteQuery,
 ) {
+    println!("influxdb_writer");
     block_on(async move {
         info!(
             "starting influx writer async {} {}",
@@ -124,10 +125,12 @@ fn spawn_influxdb_writer_internal<T: Send + 'static>(
     query_mapper: fn(T) -> WriteQuery,
 ) -> (SyncSender<T>, JoinHandle<()>) {
     let (tx, rx) = sync_channel(100);
+    println!("Spawn influx writer async");
 
     (
         tx,
         tokio::spawn(async move {
+            println!("starting influx writer async");
             info!(
                 "starting influx writer {} {}",
                 &influx_config.url, &influx_config.database
@@ -154,9 +157,8 @@ mod tests {
             .add_field("field", influxdb::Type::Float(1.23))
     }
 
-    //
-    #[test]
-    fn test_influxdb_writer_internal() -> anyhow::Result<()> {
+    #[tokio::test]
+    async fn test_influxdb_writer_internal() -> anyhow::Result<()> {
         let influx_config = InfluxConfig::new(
             "http://localhost:8086".to_string(),
             "test_db".to_string(),
@@ -180,7 +182,7 @@ mod tests {
         // Close the channel
         drop(tx);
 
-        join_handle.join().expect("stopped writer");
+        join_handle.await.expect("stopped writer");
 
         Ok(())
     }
