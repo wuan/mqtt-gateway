@@ -6,7 +6,7 @@ use log::{info, warn};
 use paho_mqtt::Message;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use tokio::task::JoinHandle;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Data {

@@ -16,7 +16,7 @@ use log::{debug, warn};
 use paho_mqtt::Message;
 use regex::Regex;
 use serde::Deserialize;
-use std::thread::JoinHandle;
+use tokio::task::JoinHandle;
 
 pub trait Timestamped {
     fn timestamp(&self) -> Option<i64>;

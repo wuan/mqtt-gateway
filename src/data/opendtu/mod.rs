@@ -11,7 +11,7 @@ use influxdb::WriteQuery;
 use log::{debug, trace};
 use paho_mqtt::Message;
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use tokio::task::JoinHandle;
 
 struct Data {
     timestamp: i64,

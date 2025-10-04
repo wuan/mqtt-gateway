@@ -8,7 +8,7 @@ use postgres::Client;
 use postgres::{Error, NoTls};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread;
-use std::thread::JoinHandle;
+use tokio::task::JoinHandle;
 
 pub struct PostgresConfig {
     host: String,
@@ -63,7 +63,7 @@ impl PostgresClient for DefaultPostgresClient {
     }
 }
 
-fn start_postgres_writer(rx: Receiver<SensorReading>, mut client: Box<dyn PostgresClient>) {
+async fn start_postgres_writer(rx: Receiver<SensorReading>, mut client: Box<dyn PostgresClient>) {
     block_on(async move {
         info!("starting postgres writer async");
 
@@ -128,9 +128,9 @@ pub fn spawn_postgres_writer_internal(
 
     (
         tx,
-        thread::spawn(move || {
+        tokio::spawn(async move {
             info!("starting postgres writer");
-            start_postgres_writer(rx, client);
+            start_postgres_writer(rx, client).await;
         }),
     )
 }

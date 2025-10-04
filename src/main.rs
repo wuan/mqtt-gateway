@@ -11,8 +11,9 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::process::exit;
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
 use std::{env, fs, time::Duration};
+use smol::Timer;
+use tokio::task::JoinHandle;
 
 mod config;
 mod data;
@@ -33,7 +34,8 @@ pub enum WriteType {
     Float(f32),
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     if env::var("RUST_LOG").is_err() {
         env::set_var("RUST_LOG", "info")
     }
@@ -107,14 +109,13 @@ fn main() {
                 );
                 while let Err(err) = mqtt_client.reconnect().await {
                     warn!("Error reconnecting: {}", err);
-                    // For tokio use: tokio::time::delay_for()
-                    async_std::task::sleep(Duration::from_millis(1000)).await;
+                    Timer::after(Duration::from_secs(1)).await;
                 }
             }
         }
 
         for handle in handles {
-            handle.join().expect("failed to join influx writer thread");
+            handle.await.expect("failed to join influx writer thread");
         }
 
         // Explicit return type for the async block

@@ -6,8 +6,7 @@ use log::{info, trace, warn};
 #[cfg(test)]
 use mockall::automock;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::thread;
-use std::thread::JoinHandle;
+use tokio::task::JoinHandle;
 
 pub struct InfluxConfig {
     url: String,
@@ -69,7 +68,7 @@ fn create_influxdb_client(influx_config: &InfluxConfig) -> anyhow::Result<Box<dy
     Ok(Box::new(DefaultInfluxClient::new(influx_client)))
 }
 
-fn influxdb_writer<T>(
+async fn influxdb_writer<T>(
     rx: Receiver<T>,
     influx_client: Box<dyn InfluxClient>,
     influx_config: InfluxConfig,
@@ -128,13 +127,13 @@ fn spawn_influxdb_writer_internal<T: Send + 'static>(
 
     (
         tx,
-        thread::spawn(move || {
+        tokio::spawn(async move {
             info!(
                 "starting influx writer {} {}",
                 &influx_config.url, &influx_config.database
             );
 
-            influxdb_writer(rx, influx_client, influx_config, query_mapper)
+            influxdb_writer(rx, influx_client, influx_config, query_mapper).await;
         }),
     )
 }

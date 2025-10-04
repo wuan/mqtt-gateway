@@ -12,7 +12,7 @@ use log::warn;
 use paho_mqtt::Message;
 use serde_json::{Map, Number, Value};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use tokio::task::JoinHandle;
 
 struct Data {
     fields: HashMap<String, Number>,
