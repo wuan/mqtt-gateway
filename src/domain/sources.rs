@@ -26,11 +26,11 @@ impl Sources {
         for source in sources {
             let targets = source.targets.unwrap_or_default();
             let (logger, mut source_handles) = match source.source_type {
-                SourceType::Shelly => shelly::create_logger(targets),
-                SourceType::Sensor => klimalogger::create_logger(targets),
-                SourceType::OpenDTU => opendtu::create_logger(targets),
-                SourceType::OpenMqttGateway => openmqttgateway::create_logger(targets),
-                SourceType::Debug => debug::create_logger(targets),
+                SourceType::Shelly => shelly::create_logger(targets).unwrap(),
+                SourceType::Sensor => klimalogger::create_logger(targets).unwrap(),
+                SourceType::OpenDTU => opendtu::create_logger(targets).unwrap(),
+                SourceType::OpenMqttGateway => openmqttgateway::create_logger(targets).unwrap(),
+                SourceType::Debug => debug::create_logger(targets).unwrap(),
             };
             handler_map.insert(source.prefix.clone(), logger);
             handles.append(&mut source_handles);

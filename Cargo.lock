@@ -1201,14 +1201,13 @@ dependencies = [
 
 [[package]]
 name = "mqtt-gateway"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-channel 1.9.0",
  "async-trait",
  "chrono",
  "env_logger",
- "futures",
  "influxdb",
  "log",
  "mockall",
@@ -1221,6 +1220,7 @@ dependencies = [
  "smol",
  "time",
  "tokio",
+ "url",
 ]
 
 [[package]]

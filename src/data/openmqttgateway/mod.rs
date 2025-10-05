@@ -2,15 +2,13 @@ use std::collections::HashMap;
 use std::sync::mpsc::SyncSender;
 
 use crate::config::Target;
-use crate::data::CheckMessage;
-use crate::target::influx;
-use crate::target::influx::InfluxConfig;
+use crate::data::{CheckMessage, LogEvent};
+use crate::target::create_targets;
+use crate::Number;
 use anyhow::Result;
-use influxdb::Timestamp::Seconds;
-use influxdb::WriteQuery;
 use log::warn;
 use paho_mqtt::Message;
-use serde_json::{Map, Number, Value};
+use serde_json::{Map, Value};
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 
@@ -20,12 +18,12 @@ struct Data {
 }
 
 pub struct OpenMqttGatewayLogger {
-    txs: Vec<SyncSender<WriteQuery>>,
+    txs: Vec<SyncSender<LogEvent>>,
     parser: OpenMqttGatewayParser,
 }
 
 impl OpenMqttGatewayLogger {
-    pub(crate) fn new(txs: Vec<SyncSender<WriteQuery>>) -> Self {
+    pub(crate) fn new(txs: Vec<SyncSender<LogEvent>>) -> Self {
         OpenMqttGatewayLogger {
             txs,
             parser: OpenMqttGatewayParser::new(),
@@ -39,15 +37,20 @@ impl CheckMessage for OpenMqttGatewayLogger {
         if let Some(data) = data {
             let timestamp = chrono::offset::Utc::now();
 
-            let mut write_query = WriteQuery::new(Seconds(timestamp.timestamp() as u128), "btle");
-            for (key, value) in data.fields {
-                write_query = write_query.add_field(key, value.as_f64());
-            }
-            for (key, value) in data.tags {
-                write_query = write_query.add_tag(key, value);
-            }
+            let log_event = LogEvent::new(
+                "btle".to_string(),
+                timestamp.timestamp(),
+                data.tags
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                data.fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            );
             for tx in &self.txs {
-                tx.send(write_query.clone()).expect("failed to send");
+                tx.send(log_event.clone()).expect("failed to send");
             }
         }
     }
@@ -95,8 +98,13 @@ impl OpenMqttGatewayParser {
 
                 for (key, value) in result {
                     match value {
-                        Value::Number(value) => {
-                            fields.insert(key, value);
+                        Value::Number(number) => {
+                            let number_value = if number.is_f64() {
+                                Number::Float(number.as_f64().unwrap())
+                            } else {
+                                Number::Int(number.as_i64().unwrap())
+                            };
+                            fields.insert(key, number_value);
                         }
                         Value::String(value) => {
                             tags.insert(key, value);
@@ -139,8 +147,8 @@ mod tests {
         assert!(result.is_some());
         let data = result.unwrap();
         let fields = data.fields;
-        assert_eq!(fields.get("rssi").unwrap().as_f64().unwrap(), -92f64);
-        assert_eq!(fields.get("seconds").unwrap().as_f64().unwrap(), 115f64);
+        assert_eq!(*fields.get("rssi").unwrap(), Number::Int(-92));
+        assert_eq!(*fields.get("seconds").unwrap(), Number::Int(115));
         let tags = data.tags;
         assert_eq!(tags.get("device").unwrap(), "283146C17616");
         assert_eq!(tags.get("gateway").unwrap(), "D12331654712");
@@ -205,30 +213,13 @@ mod tests {
     }
 }
 
-pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>) {
-    let mut txs: Vec<SyncSender<WriteQuery>> = Vec::new();
-    let mut handles: Vec<JoinHandle<()>> = Vec::new();
+pub fn create_logger(
+    targets: Vec<Target>,
+) -> Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
+    let (txs, handles) = create_targets(targets)?;
 
-    for target in targets {
-        let (tx, handle) = match target {
-            Target::InfluxDB {
-                url,
-                database,
-                user,
-                password,
-            } => influx::spawn_influxdb_writer(
-                InfluxConfig::new(url, database, user, password),
-                std::convert::identity,
-            ),
-            Target::Postgresql { .. } => {
-                panic!("Postgresql not supported for open");
-            }
-        };
-        txs.push(tx);
-        handles.push(handle);
-    }
-
-    let logger = OpenMqttGatewayLogger::new(txs);
-
-    (Arc::new(Mutex::new(logger)), handles)
+    Ok((
+        Arc::new(Mutex::new(OpenMqttGatewayLogger::new(txs))),
+        handles,
+    ))
 }

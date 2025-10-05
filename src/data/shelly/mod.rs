@@ -5,13 +5,11 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use crate::config::Target;
-use crate::data::{shelly, CheckMessage};
-use crate::target::influx;
-use crate::target::influx::InfluxConfig;
-use crate::WriteType;
+use crate::data::{shelly, CheckMessage, LogEvent};
+use crate::target::create_targets;
+use crate::Number;
 use anyhow::Result;
 use data::{CoverData, SwitchData};
-use influxdb::{Timestamp, WriteQuery};
 use log::{debug, warn};
 use paho_mqtt::Message;
 use regex::Regex;
@@ -27,11 +25,11 @@ pub trait Typenamed {
 }
 
 pub struct ShellyLogger {
-    txs: Vec<SyncSender<WriteQuery>>,
+    txs: Vec<SyncSender<LogEvent>>,
 }
 
 impl ShellyLogger {
-    pub(crate) fn new(txs: Vec<SyncSender<WriteQuery>>) -> Self {
+    pub(crate) fn new(txs: Vec<SyncSender<LogEvent>>) -> Self {
         ShellyLogger { txs }
     }
 }
@@ -40,37 +38,37 @@ pub fn parse<'a, T: Deserialize<'a> + Clone>(msg: &'a Message) -> Result<T> {
     Ok(serde_json::from_slice::<T>(msg.payload())?)
 }
 
-type WriteTypeMapper<T> = fn(&T) -> Option<WriteType>;
+type WriteTypeMapper<T> = fn(&T) -> Option<Number>;
 
 const SWITCH_FIELDS: &[(&str, WriteTypeMapper<SwitchData>, &str)] = &[
     (
         "output",
-        |data: &SwitchData| Some(WriteType::Int(data.output as i32)),
+        |data: &SwitchData| Some(Number::Int(data.output as i64)),
         "bool",
     ),
     (
         "power",
-        |data: &SwitchData| data.power.map(WriteType::Float),
+        |data: &SwitchData| data.power.map(Number::Float),
         "W",
     ),
     (
         "current",
-        |data: &SwitchData| data.current.map(WriteType::Float),
+        |data: &SwitchData| data.current.map(Number::Float),
         "A",
     ),
     (
         "voltage",
-        |data: &SwitchData| data.voltage.map(WriteType::Float),
+        |data: &SwitchData| data.voltage.map(Number::Float),
         "V",
     ),
     (
         "total_energy",
-        |data: &SwitchData| Some(WriteType::Float(data.energy.total)),
+        |data: &SwitchData| Some(Number::Float(data.energy.total)),
         "Wh",
     ),
     (
         "temperature",
-        |data: &SwitchData| Some(WriteType::Float(data.temperature.t_celsius)),
+        |data: &SwitchData| Some(Number::Float(data.temperature.t_celsius)),
         "°C",
     ),
 ];
@@ -78,32 +76,32 @@ const SWITCH_FIELDS: &[(&str, WriteTypeMapper<SwitchData>, &str)] = &[
 const COVER_FIELDS: &[(&str, WriteTypeMapper<CoverData>, &str)] = &[
     (
         "position",
-        |data: &CoverData| data.position.map(WriteType::Int),
+        |data: &CoverData| data.position.map(Number::Int),
         "%",
     ),
     (
         "power",
-        |data: &CoverData| data.power.map(WriteType::Float),
+        |data: &CoverData| data.power.map(Number::Float),
         "W",
     ),
     (
         "current",
-        |data: &CoverData| data.current.map(WriteType::Float),
+        |data: &CoverData| data.current.map(Number::Float),
         "A",
     ),
     (
         "voltage",
-        |data: &CoverData| data.voltage.map(WriteType::Float),
+        |data: &CoverData| data.voltage.map(Number::Float),
         "V",
     ),
     (
         "total_energy",
-        |data: &CoverData| Some(WriteType::Float(data.energy.total)),
+        |data: &CoverData| Some(Number::Float(data.energy.total)),
         "Wh",
     ),
     (
         "temperature",
-        |data: &CoverData| Some(WriteType::Float(data.temperature.t_celsius)),
+        |data: &CoverData| Some(Number::Float(data.temperature.t_celsius)),
         "°C",
     ),
 ];
@@ -124,13 +122,13 @@ impl CheckMessage for ShellyLogger {
     }
 
     fn checked_count(&self) -> u64 {
-       0 
+        0
     }
 }
 
 fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenamed>(
     msg: &'a Message,
-    txs: &Vec<SyncSender<WriteQuery>>,
+    txs: &Vec<SyncSender<LogEvent>>,
     fields: &[(&str, WriteTypeMapper<T>, &str)],
 ) {
     let location = msg.topic().split("/").nth(1).unwrap();
@@ -139,7 +137,7 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
     if parse_result.is_err() {
         warn!(
             "Shelly parse error: {:?} on '{}' (topic: {})",
-            parse_result.err(),
+            parse_result.err().unwrap().to_string(),
             msg.payload_str(),
             msg.topic()
         );
@@ -150,24 +148,24 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
         debug!("Shelly {}:{}: {:?}", location, channel, data);
 
         if let Some(minute_ts) = data.timestamp() {
-            let timestamp = Timestamp::Seconds(minute_ts as u128);
             for (measurement, value, unit) in fields {
-                let query = WriteQuery::new(timestamp, *measurement);
                 if let Some(result) = value(&data) {
-                    let query = match result {
-                        WriteType::Int(i) => query.add_field("value", i),
-                        WriteType::Float(f) => query.add_field("value", f),
-                    };
-
-                    let query = query
-                        .add_tag("location", location)
-                        .add_tag("channel", channel)
-                        .add_tag("sensor", "shelly")
-                        .add_tag("type", data.type_name())
-                        .add_tag("unit", unit);
+                    let tags = vec![
+                        ("location", location),
+                        ("channel", channel),
+                        ("sensor", "shelly"),
+                        ("type", data.type_name()),
+                        ("unit", unit),
+                    ];
+                    let log_event = LogEvent::new_value_from_ref(
+                        measurement.to_string(),
+                        minute_ts,
+                        tags.into_iter().collect(),
+                        result,
+                    );
 
                     for tx in txs {
-                        tx.send(query.clone()).expect("failed to send");
+                        tx.send(log_event.clone()).expect("failed to send");
                     }
                 }
             }
@@ -180,13 +178,62 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
 #[cfg(test)]
 mod tests {
     use super::*;
-    use influxdb::Query;
+    use log::LevelFilter;
     use paho_mqtt::QOS_1;
+    use std::collections::HashMap;
+    use std::io;
+    use std::io::Write;
     use std::sync::mpsc::{sync_channel, Receiver};
     use std::time::Duration;
 
-    fn next(rx: &Receiver<WriteQuery>) -> Result<String> {
-        Ok(rx.recv_timeout(Duration::from_micros(100))?.build()?.get())
+    struct WriteAdapter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for WriteAdapter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().write(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.0.lock().unwrap().flush()
+        }
+    }
+
+    fn next(rx: &Receiver<LogEvent>) -> Result<LogEvent> {
+        let result = rx.recv_timeout(Duration::from_micros(100))?;
+        Ok(result)
+    }
+
+    struct EventAssert {
+        tags: HashMap<String, String>,
+    }
+
+    impl EventAssert {
+        fn new(tags: Vec<(&str, &str)>) -> Self {
+            Self { tags: to_map(tags) }
+        }
+
+        fn assert(
+            &self,
+            log_event: LogEvent,
+            measurement: &str,
+            tags: Vec<(&str, &str)>,
+            number: Number,
+        ) {
+            let mut expected = self.tags.clone();
+            expected.extend(to_map(tags));
+
+            for (tag, value) in &expected {
+                assert_eq!(log_event.tags.get(tag).unwrap(), value);
+            }
+            assert_eq!(log_event.measurement, measurement);
+            assert_eq!(log_event.fields.get("value").unwrap(), &number);
+        }
+    }
+
+    fn to_map(tags: Vec<(&str, &str)>) -> HashMap<String, String> {
+        tags.into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
@@ -206,26 +253,53 @@ mod tests {
         );
         logger.check_message(&message);
 
-        assert!(next(&rx)?.starts_with(
-            "output,location=loo-fan,channel=1,sensor=shelly,type=switch,unit=bool value=0i "
-        ));
-        assert!(next(&rx)?.starts_with(
-            "power,location=loo-fan,channel=1,sensor=shelly,type=switch,unit=W value=0 "
-        ));
-        assert!(next(&rx)?.starts_with(
-            "current,location=loo-fan,channel=1,sensor=shelly,type=switch,unit=A value=3.0999"
-        ));
-        assert!(next(&rx)?.starts_with(
-            "voltage,location=loo-fan,channel=1,sensor=shelly,type=switch,unit=V value=226.5 "
-        ));
-        assert!(next(&rx)?.starts_with("total_energy,location=loo-fan,channel=1,sensor=shelly,type=switch,unit=Wh value=1094.86"));
-        assert!(next(&rx)?.starts_with(
-            "temperature,location=loo-fan,channel=1,sensor=shelly,type=switch,unit=°C value=36.40"
-        ));
+        let event_assert = EventAssert::new(vec![
+            ("location", "loo-fan"),
+            ("sensor", "shelly"),
+            ("channel", "1"),
+        ]);
+        event_assert.assert(next(&rx)?, "output", vec![("unit", "bool")], Number::Int(0));
+        event_assert.assert(
+            next(&rx)?,
+            "power",
+            vec![("unit", "W")],
+            Number::Float(0f64),
+        );
+        event_assert.assert(
+            next(&rx)?,
+            "current",
+            vec![("unit", "A")],
+            Number::Float(3.1),
+        );
+        event_assert.assert(
+            next(&rx)?,
+            "voltage",
+            vec![("unit", "V")],
+            Number::Float(226.5),
+        );
+        event_assert.assert(
+            next(&rx)?,
+            "total_energy",
+            vec![("unit", "Wh")],
+            Number::Float(1094.865),
+        );
+        event_assert.assert(
+            next(&rx)?,
+            "temperature",
+            vec![("unit", "°C")],
+            Number::Float(36.40),
+        );
 
         assert!(next(&rx).is_err());
         Ok(())
     }
+
+    const COVER_PAYLOAD: &'static str =
+        "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\
+                \"apower\":0.0,\"voltage\":231.7,\"current\":0.500,\"pf\":0.00,\"freq\":50.0,\
+                \"aenergy\":{\"total\":3.143,\"by_minute\":[0.000,0.000,97.712],\
+                \"minute_ts\":1703414519},\"temperature\":{\"tC\":30.7, \"tF\":87.3},\
+                \"pos_control\":true,\"last_direction\":\"open\",\"current_pos\":100}";
 
     #[test]
     fn test_handle_curtain_message() -> Result<()> {
@@ -236,25 +310,53 @@ mod tests {
 
         let message = Message::new(
             "shellies/bedroom-curtain/status/cover:0",
-            "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\
-                \"apower\":0.0,\"voltage\":231.7,\"current\":0.500,\"pf\":0.00,\"freq\":50.0,\
-                \"aenergy\":{\"total\":3.143,\"by_minute\":[0.000,0.000,97.712],\
-                \"minute_ts\":1703414519},\"temperature\":{\"tC\":30.7, \"tF\":87.3},\
-                \"pos_control\":true,\"last_direction\":\"open\",\"current_pos\":100}",
+            COVER_PAYLOAD,
             QOS_1,
         );
         logger.check_message(&message);
 
-        assert!(next(&rx)?.starts_with("position,location=bedroom-curtain,channel=0,sensor=shelly,type=cover,unit=% value=100i "));
-        assert!(next(&rx)?.starts_with(
-            "power,location=bedroom-curtain,channel=0,sensor=shelly,type=cover,unit=W value=0 "
-        ));
-        assert!(next(&rx)?.starts_with(
-            "current,location=bedroom-curtain,channel=0,sensor=shelly,type=cover,unit=A value=0.5 "
-        ));
-        assert!(next(&rx)?.starts_with("voltage,location=bedroom-curtain,channel=0,sensor=shelly,type=cover,unit=V value=231.6999"));
-        assert!(next(&rx)?.starts_with("total_energy,location=bedroom-curtain,channel=0,sensor=shelly,type=cover,unit=Wh value=3.14"));
-        assert!(next(&rx)?.starts_with("temperature,location=bedroom-curtain,channel=0,sensor=shelly,type=cover,unit=°C value=30.7"));
+        let event_assert = EventAssert::new(vec![
+            ("sensor", "shelly"),
+            ("location", "bedroom-curtain"),
+            ("type", "cover"),
+            ("channel", "0"),
+        ]);
+        event_assert.assert(
+            next(&rx)?,
+            "position",
+            vec![("unit", "%")],
+            Number::Int(100),
+        );
+        event_assert.assert(
+            next(&rx)?,
+            "power",
+            vec![("unit", "W")],
+            Number::Float(0f64),
+        );
+        event_assert.assert(
+            next(&rx)?,
+            "current",
+            vec![("unit", "A")],
+            Number::Float(0.5),
+        );
+        event_assert.assert(
+            next(&rx)?,
+            "voltage",
+            vec![("unit", "V")],
+            Number::Float(231.7),
+        );
+        event_assert.assert(
+            next(&rx)?,
+            "total_energy",
+            vec![("unit", "Wh")],
+            Number::Float(3.143),
+        );
+        event_assert.assert(
+            next(&rx)?,
+            "temperature",
+            vec![("unit", "°C")],
+            Number::Float(30.7),
+        );
         assert!(next(&rx).is_err());
 
         Ok(())
@@ -262,6 +364,19 @@ mod tests {
 
     #[test]
     fn test_handle_message_with_parse_error() -> Result<()> {
+        let log_buffer = Arc::new(Mutex::new(Vec::new()));
+        let buffer_clone = log_buffer.clone();
+
+        let _ = env_logger::builder()
+            .filter(None, log::LevelFilter::Off)
+            .filter_module("mqtt_gateway::data::shelly", LevelFilter::Warn)
+            .format_timestamp(None)
+            .target(env_logger::Target::Pipe(Box::new(WriteAdapter(
+                buffer_clone,
+            ))))
+            .is_test(true)
+            .try_init();
+
         let (tx, rx) = sync_channel(100);
         let txs = vec![tx];
 
@@ -277,8 +392,14 @@ mod tests {
 
         assert!(next(&rx).is_err());
 
+        assert_eq!(
+            String::from_utf8_lossy(&log_buffer.lock().unwrap().as_slice()),
+            "[WARN  mqtt_gateway::data::shelly] Shelly parse error: \"missing field `aenergy` at line 1 column 62\" on '{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\"apower\":0.0}' (topic: shellies/bedroom-curtain/status/cover:0)\n"
+        );
+
         Ok(())
     }
+
     #[test]
     fn test_parse_switch_status() -> Result<()> {
         let message = Message::new("shellies/loo-fan/status/switch:0", "{\"id\":0, \"source\":\"timer\", \"output\":false, \"apower\":0.0, \"voltage\":226.5, \"current\":3.1, \"aenergy\":{\"total\":1094.865,\"by_minute\":[0.000,0.000,0.000],\"minute_ts\":1703415907},\"temperature\":{\"tC\":36.4, \"tF\":97.5}}", QOS_1);
@@ -331,28 +452,10 @@ mod tests {
     }
 }
 
-pub fn create_logger(targets: Vec<Target>) -> (Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>) {
-    let mut txs: Vec<SyncSender<WriteQuery>> = Vec::new();
-    let mut handles: Vec<JoinHandle<()>> = Vec::new();
+pub fn create_logger(
+    targets: Vec<Target>,
+) -> Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
+    let (txs, handles) = create_targets(targets)?;
 
-    for target in targets {
-        let (tx, handle) = match target {
-            Target::InfluxDB {
-                url,
-                database,
-                user,
-                password,
-            } => influx::spawn_influxdb_writer(
-                InfluxConfig::new(url, database, user, password),
-                std::convert::identity,
-            ),
-            Target::Postgresql { .. } => {
-                panic!("Postgresql not supported for shelly");
-            }
-        };
-        txs.push(tx);
-        handles.push(handle);
-    }
-
-    (Arc::new(Mutex::new(ShellyLogger::new(txs))), handles)
+    Ok((Arc::new(Mutex::new(ShellyLogger::new(txs))), handles))
 }
