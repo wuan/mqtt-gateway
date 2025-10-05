@@ -1,6 +1,8 @@
 use crate::config::{Source, SourceType};
 use crate::data::{debug, klimalogger, opendtu, openmqttgateway, shelly, CheckMessage};
 use crate::domain::MqttClient;
+#[cfg(test)]
+use crate::domain::MockMqttClient;
 use log::{info, trace, warn};
 use paho_mqtt::{Message, ServerResponse, QOS_1};
 use std::collections::HashMap;
@@ -74,3 +76,77 @@ impl Sources {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::SourceType;
+
+
+    #[tokio::test]
+    async fn test_sources_creation() {
+        let sources = vec![Source {
+            name: "foo".to_string(),
+            prefix: "test".to_string(),
+            source_type: SourceType::Debug,
+            targets: None,
+        }];
+
+        let sources = Sources::new(sources);
+        assert_eq!(sources.topics.len(), 1);
+        assert_eq!(sources.qoss.len(), 1);
+        assert_eq!(sources.topics[0], "test/#");
+        assert_eq!(sources.qoss[0], QOS_1);
+    }
+
+    #[tokio::test]
+    async fn test_subscribe() {
+        let sources = vec![Source {
+            name: "foo".to_string(),
+            prefix: "test".to_string(),
+            source_type: SourceType::Debug,
+            targets: None,
+        }];
+
+        let sources = Sources::new(sources);
+
+        let mut mock_client = Box::new(MockMqttClient::new());
+        mock_client.expect_subscribe_many()
+            .times(1)
+            .returning(|_, _| Ok(ServerResponse::new()) );
+        
+        
+        let result = sources.subscribe(&(mock_client as Box<dyn MqttClient>)).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_message() {
+        let sources = vec![Source {
+            name: "foo".to_string(),
+            prefix: "test".to_string(),
+            source_type: SourceType::Debug,
+            targets: None,
+        }];
+
+        let sources = Sources::new(sources);
+        let message = Message::new("test/topic", "payload", QOS_1);
+        sources.handle(message).await;
+    }
+
+    #[tokio::test]
+    async fn test_shutdown() {
+        let sources = vec![Source {
+            name: "foo".to_string(),
+            prefix: "test".to_string(),
+            source_type: SourceType::Debug,
+            targets: None,
+        }];
+
+        let sources = Sources::new(sources);
+        sources.shutdown().await;
+    }
+}
+
+

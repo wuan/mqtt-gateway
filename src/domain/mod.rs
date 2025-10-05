@@ -12,7 +12,7 @@ pub(crate) mod sources;
 
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub(crate) trait MqttClient: Sync + Send {
+pub(crate) trait MqttClient {
     async fn connect(&self) -> anyhow::Result<ServerResponse>;
     async fn subscribe_many(&self, topics: &Vec<String>, qoss: &Vec<i32>) -> anyhow::Result<ServerResponse>;
     async fn create(&mut self) -> anyhow::Result<Stream>;
