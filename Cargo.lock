@@ -1201,7 +1201,7 @@ dependencies = [
 
 [[package]]
 name = "mqtt-gateway"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "anyhow",
  "async-channel 1.9.0",
