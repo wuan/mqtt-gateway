@@ -1,20 +1,23 @@
-use paho_mqtt::{AsyncClient, Message, ServerResponse};
-use std::time::Duration;
 use async_trait::async_trait;
 #[cfg(test)]
 use mockall::automock;
 use paho_mqtt as mqtt;
+use paho_mqtt::{AsyncClient, Message, ServerResponse};
 use smol::stream::StreamExt;
+use std::time::Duration;
 
 pub(crate) mod receiver;
 pub(crate) mod sources;
-
 
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub(crate) trait MqttClient {
     async fn connect(&self) -> anyhow::Result<ServerResponse>;
-    async fn subscribe_many(&self, topics: &Vec<String>, qoss: &Vec<i32>) -> anyhow::Result<ServerResponse>;
+    async fn subscribe_many(
+        &self,
+        topics: &Vec<String>,
+        qoss: &Vec<i32>,
+    ) -> anyhow::Result<ServerResponse>;
     async fn create(&mut self) -> anyhow::Result<Box<dyn Stream>>;
     fn is_connected(&self) -> bool;
     async fn reconnect(&self) -> anyhow::Result<ServerResponse>;
@@ -94,7 +97,6 @@ impl StreamDefault {
 
 #[async_trait]
 impl Stream for StreamDefault {
-
     async fn next(&mut self) -> Option<Option<Message>> {
         self.stream.next().await
     }

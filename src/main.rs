@@ -46,7 +46,10 @@ async fn main() -> anyhow::Result<()> {
 
     let mqtt_client = source::mqtt::create_mqtt_client(config.mqtt_url, config.mqtt_client_id);
 
-    let receiver = Receiver::new(Box::new(MqttClientDefault::new(mqtt_client)), Sources::new(config.sources));
+    let receiver = Receiver::new(
+        Box::new(MqttClientDefault::new(mqtt_client)),
+        Sources::new(config.sources),
+    );
     receiver.listen().await
 }
 

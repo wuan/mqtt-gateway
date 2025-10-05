@@ -1,8 +1,8 @@
 use crate::config::{Source, SourceType};
 use crate::data::{debug, klimalogger, opendtu, openmqttgateway, shelly, CheckMessage};
-use crate::domain::MqttClient;
 #[cfg(test)]
 use crate::domain::MockMqttClient;
+use crate::domain::MqttClient;
 use log::{info, trace, warn};
 use paho_mqtt::{Message, ServerResponse, QOS_1};
 use std::collections::HashMap;
@@ -82,14 +82,13 @@ pub(crate) mod tests {
     use super::*;
     use crate::config::SourceType;
 
-
     #[tokio::test]
     async fn test_sources_creation() {
         let sources = sources();
-        
+
         assert_eq!(sources.topics.len(), 1);
         assert_eq!(sources.qoss.len(), 1);
-        assert_eq!(sources.topics[0], "test/#");
+        assert_eq!(sources.topics[0], "bar/#");
         assert_eq!(sources.qoss[0], QOS_1);
     }
 
@@ -98,11 +97,14 @@ pub(crate) mod tests {
         let sources = sources();
 
         let mut mock_client = Box::new(MockMqttClient::new());
-        mock_client.expect_subscribe_many()
+        mock_client
+            .expect_subscribe_many()
             .times(1)
-            .returning(|_, _| Ok(ServerResponse::new()) );
-        
-        let result = sources.subscribe(&(mock_client as Box<dyn MqttClient>)).await;
+            .returning(|_, _| Ok(ServerResponse::new()));
+
+        let result = sources
+            .subscribe(&(mock_client as Box<dyn MqttClient>))
+            .await;
 
         assert!(result.is_ok());
     }
@@ -111,14 +113,14 @@ pub(crate) mod tests {
     async fn test_handle_message() {
         let sources = sources();
         let message = Message::new("test/topic", "payload", QOS_1);
-        
+
         sources.handle(message).await;
     }
 
     #[tokio::test]
     async fn test_shutdown() {
         let sources = sources();
-        
+
         sources.shutdown().await;
     }
 
@@ -134,5 +136,3 @@ pub(crate) mod tests {
         sources
     }
 }
-
-
