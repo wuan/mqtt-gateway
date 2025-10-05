@@ -294,6 +294,12 @@ mod tests {
         Ok(())
     }
 
+    const COVER_PAYLOAD: &'static str = "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\
+                \"apower\":0.0,\"voltage\":231.7,\"current\":0.500,\"pf\":0.00,\"freq\":50.0,\
+                \"aenergy\":{\"total\":3.143,\"by_minute\":[0.000,0.000,97.712],\
+                \"minute_ts\":1703414519},\"temperature\":{\"tC\":30.7, \"tF\":87.3},\
+                \"pos_control\":true,\"last_direction\":\"open\",\"current_pos\":100}";
+
     #[test]
     fn test_handle_curtain_message() -> Result<()> {
         let (tx, rx) = sync_channel(100);
@@ -303,11 +309,7 @@ mod tests {
 
         let message = Message::new(
             "shellies/bedroom-curtain/status/cover:0",
-            "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\
-                \"apower\":0.0,\"voltage\":231.7,\"current\":0.500,\"pf\":0.00,\"freq\":50.0,\
-                \"aenergy\":{\"total\":3.143,\"by_minute\":[0.000,0.000,97.712],\
-                \"minute_ts\":1703414519},\"temperature\":{\"tC\":30.7, \"tF\":87.3},\
-                \"pos_control\":true,\"last_direction\":\"open\",\"current_pos\":100}",
+            COVER_PAYLOAD,
             QOS_1,
         );
         logger.check_message(&message);

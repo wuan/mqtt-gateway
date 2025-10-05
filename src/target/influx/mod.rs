@@ -1,12 +1,12 @@
 use crate::data::LogEvent;
 use crate::Number;
 use async_trait::async_trait;
-use influxdb::{Client, Timestamp, WriteQuery};
+use influxdb::{Client, Error, Timestamp, WriteQuery};
 use log::{debug, info, trace, warn};
 #[cfg(test)]
 use mockall::automock;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 use url::Url;
 
@@ -50,12 +50,17 @@ impl DefaultInfluxClient {
 #[async_trait]
 trait InfluxClient: Sync + Send {
     async fn write(&self, point: WriteQuery) -> Result<String, influxdb::Error>;
+    async fn write_all(&self, points: Vec<WriteQuery>) -> Result<String, influxdb::Error>;
 }
 
 #[async_trait]
 impl InfluxClient for DefaultInfluxClient {
     async fn write(&self, write_query: WriteQuery) -> Result<String, influxdb::Error> {
         self.client.query(write_query).await
+    }
+
+    async fn write_all(&self, points: Vec<WriteQuery>) -> Result<String, Error> {
+        self.client.query(points).await
     }
 }
 
@@ -83,38 +88,78 @@ async fn influxdb_writer(
     influx_client: Box<dyn InfluxClient>,
     influx_config: InfluxConfig,
 ) {
-    info!(
-        "starting influx writer async {} {}",
-        &influx_config.url, &influx_config.database
-    );
+    let mut writer = Writer::new(influx_client, influx_config, Duration::from_secs(5));
 
     loop {
         let result = rx.recv();
-        let data = match result {
-            Ok(query) => query,
+
+        let query = match result {
+            Ok(event) => map_to_query(event),
             Err(error) => {
                 warn!("error receiving query: {:?}", error);
+                writer.flush().await;
                 break;
             }
         };
-        let query = map_to_point(data);
-        trace!("before write to influx");
-        let start = Instant::now();
-        let result = influx_client.write(query).await;
-        let duration = start.elapsed();
-        debug!("write to InfluxDB ({:.2})", duration.as_secs_f64());
-        match result {
-            Ok(_) => {}
-            Err(error) => {
-                panic!(
-                    "#### Error writing to influx: {} {}: {:?}",
-                    &influx_config.url, &influx_config.database, error
-                );
-            }
-        }
+
+        writer.queue(query).await;
     }
     info!("exiting influx writer async");
 }
+
+struct Writer {
+    influx_client: Box<dyn InfluxClient>,
+    influx_config: InfluxConfig,
+    queries: Vec<WriteQuery>,
+    accumulation_time: Duration,
+    start: Instant,
+}
+
+impl Writer {
+    pub(crate) async fn queue(&mut self, query: WriteQuery) {
+        self.queries.push(query);
+
+        trace!("influx writer: # of points {} time {}", self.queries.len(), self.start.elapsed().as_millis());
+        if self.queries.len() > 0 && self.start.elapsed() > self.accumulation_time {
+            self.flush().await;
+        }
+    }
+
+    async fn flush(&mut self) {
+        let now = Instant::now();
+        let query_count = self.queries.len();
+        trace!("before write to influx");
+        let result = self.influx_client.write_all(self.queries.clone()).await;
+        let duration = now.elapsed();
+        debug!("write to InfluxDB #{} ({:.3} s)", query_count, duration.as_secs_f64());
+        match result {
+            Ok(_) => {}
+            Err(error) => {
+                &self.panic(error);
+            }
+        }
+        self.queries.clear();
+        self.start = Instant::now();
+    }
+
+    fn panic(&self, error: Error) {
+        panic!(
+            "#### Error writing to influx: {} {}: {:?}",
+            self.influx_config.url, self.influx_config.database, error
+        );
+    }
+}
+
+impl Writer {
+    fn new(influx_client: Box<dyn InfluxClient>, influx_config: InfluxConfig, accumulation_time: Duration) -> Self {
+        info!(
+        "starting influx writer async {} {}",
+        &influx_config.url, &influx_config.database
+    );
+        Self { influx_client, influx_config , queries: Vec::new(), start: Instant::now(), accumulation_time }
+    }
+}
+
 
 pub fn spawn_influxdb_writer(
     influx_config: InfluxConfig,
@@ -145,7 +190,7 @@ fn spawn_influxdb_writer_internal(
     )
 }
 
-pub fn map_to_point(log_event: LogEvent) -> WriteQuery {
+pub fn map_to_query(log_event: LogEvent) -> WriteQuery {
     let mut write_query = WriteQuery::new(
         Timestamp::Seconds(log_event.timestamp as u128),
         log_event.measurement,
@@ -183,7 +228,7 @@ mod tests {
 
         let mut mock_client = Box::new(MockInfluxClient::new());
         mock_client
-            .expect_write()
+            .expect_write_all()
             .times(1)
             .returning(|_| Ok("test_data".to_string()));
 
