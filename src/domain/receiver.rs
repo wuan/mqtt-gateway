@@ -49,19 +49,15 @@ impl Receiver {
 
 #[cfg(test)]
 mod tests {
+    use log::LevelFilter;
     use super::*;
     use crate::domain::sources::tests::sources;
     use crate::domain::MockMqttClient;
     use mockall::predicate::*;
     use paho_mqtt::ServerResponse;
 
-    fn init() {
-        let _ = env_logger::builder().is_test(true).try_init();
-    }
-
     #[tokio::test]
-    async fn test_receiver_reconnect() {
-        init();
+    async fn test_receiver_reconnect() -> anyhow::Result<()> {
         let mut mqtt_client = Box::new(crate::domain::MockMqttClient::new());
         mqtt_client.expect_reconnect().times(2).returning(|| {
             static mut CALLED: bool = false;
@@ -74,11 +70,13 @@ mod tests {
                 }
             }
         });
+        mqtt_client.expect_is_connected().times(1).returning(|| {true});
 
         let sources = sources();
         let mut receiver = Receiver::new(mqtt_client, sources);
 
         receiver.handle_error().await;
+        Ok(())
     }
 
     #[tokio::test]
@@ -138,6 +136,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_listen_with_error() {
+        let _ = env_logger::builder().filter_level(LevelFilter::Info).is_test(true).try_init();
         let mut mqtt_client = Box::new(crate::domain::MockMqttClient::new());
         mqtt_client.expect_create().times(1).returning(|| {
             let mut stream = Box::new(crate::domain::MockStream::new());
@@ -145,6 +144,7 @@ mod tests {
             stream.expect_next().times(1).returning(|| None);
             Ok(stream)
         });
+        mqtt_client.expect_is_connected().times(1).returning(|| {true});
 
         mqtt_client
             .expect_subscribe_many()

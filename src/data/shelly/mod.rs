@@ -364,14 +364,15 @@ mod tests {
         let log_buffer = Arc::new(Mutex::new(Vec::new()));
         let buffer_clone = log_buffer.clone();
 
-        env_logger::builder()
-            .filter_level(LevelFilter::Warn)
-            .format(|buf, record| writeln!(buf, "{}: {}", record.level(), record.args()))
+        let _ = env_logger::builder()
+            .filter(None, log::LevelFilter::Off)
+            .filter_module("mqtt_gateway::data::shelly", LevelFilter::Warn)
+            .format_timestamp(None)
             .target(env_logger::Target::Pipe(Box::new(WriteAdapter(
                 buffer_clone,
             ))))
             .is_test(true)
-            .try_init()?;
+            .try_init();
 
         let (tx, rx) = sync_channel(100);
         let txs = vec![tx];
@@ -386,11 +387,12 @@ mod tests {
         );
         logger.check_message(&message);
 
+
         assert!(next(&rx).is_err());
 
         assert_eq!(
-            String::from_utf8_lossy(log_buffer.lock().unwrap().as_slice()),
-            "WARN: Shelly parse error: \"missing field `aenergy` at line 1 column 62\" on '{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\"apower\":0.0}' (topic: shellies/bedroom-curtain/status/cover:0)\n"
+            String::from_utf8_lossy(&log_buffer.lock().unwrap().as_slice()),
+            "[WARN  mqtt_gateway::data::shelly] Shelly parse error: \"missing field `aenergy` at line 1 column 62\" on '{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\"apower\":0.0}' (topic: shellies/bedroom-curtain/status/cover:0)\n"
         );
 
         Ok(())
