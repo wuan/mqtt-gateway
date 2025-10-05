@@ -27,7 +27,7 @@ pub fn create_targets(
                 token,
             } => influx::spawn_influxdb_writer(InfluxConfig::new(
                 url, database, user, password, token,
-            )?),
+            )),
             Target::Postgresql {
                 host,
                 port,
