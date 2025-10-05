@@ -36,10 +36,9 @@ impl MqttClientDefault {
 #[async_trait]
 impl MqttClient for MqttClientDefault {
     async fn connect(&self) -> anyhow::Result<ServerResponse> {
-        let conn_opts = mqtt::ConnectOptionsBuilder::new_v5()
+        let conn_opts = mqtt::ConnectOptionsBuilder::new_v3()
             .keep_alive_interval(Duration::from_secs(30))
-            .clean_session(true)
-            .automatic_reconnect(Duration::from_secs(1), Duration::from_secs(300))
+            .clean_session(false)
             .finalize();
 
         self.mqtt_client
