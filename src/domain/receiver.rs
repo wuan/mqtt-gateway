@@ -42,7 +42,7 @@ impl Receiver {
         );
         while let Err(err) = self.mqtt_client.reconnect().await {
             warn!("Error reconnecting: {}", err);
-            Timer::after(Duration::from_secs(1)).await;
+            Timer::after(Duration::from_secs(5)).await;
         }
     }
 }
