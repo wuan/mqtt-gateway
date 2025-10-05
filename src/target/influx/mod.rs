@@ -1,9 +1,8 @@
-//use anyhow::Result;
 use crate::data::LogEvent;
 use crate::Number;
 use async_trait::async_trait;
 use influxdb::{Client, Timestamp, WriteQuery};
-use log::{info, trace, warn};
+use log::{debug, info, trace, warn};
 #[cfg(test)]
 use mockall::automock;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
@@ -103,7 +102,7 @@ async fn influxdb_writer(
         let start = Instant::now();
         let result = influx_client.write(query).await;
         let duration = start.elapsed();
-        info!("write to InfluxDB ({:.2})", duration.as_secs_f64());
+        debug!("write to InfluxDB ({:.2})", duration.as_secs_f64());
         match result {
             Ok(_) => {}
             Err(error) => {
