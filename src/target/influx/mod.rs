@@ -119,8 +119,8 @@ impl Writer {
     pub(crate) async fn queue(&mut self, query: WriteQuery) {
         self.queries.push(query);
 
-        trace!("influx writer: # of points {} time {}", self.queries.len(), self.start.elapsed().as_millis());
-        if self.queries.len() > 0 && self.start.elapsed() > self.accumulation_time {
+        trace!("influx writer: # of points {} time {} (elapsed: {})", self.queries.len(), self.start.elapsed().as_millis(), self.start.elapsed() >= self.accumulation_time);
+        if self.queries.len() > 0 && self.start.elapsed() >= self.accumulation_time {
             self.flush().await;
         }
     }
@@ -213,19 +213,35 @@ pub fn map_to_query(log_event: LogEvent) -> WriteQuery {
 
 #[cfg(test)]
 mod tests {
+    use mockall::predicate::function;
     use super::*;
     use crate::Number;
 
-    #[tokio::test]
-    async fn test_influxdb_writer_internal() -> anyhow::Result<()> {
-        let influx_config = InfluxConfig::new(
+    fn log_event() -> LogEvent {
+        LogEvent::new_value_from_ref(
+            "test".to_string(),
+            0i64,
+            vec![].into_iter().collect(),
+            Number::Float(1.23),
+        )
+    }
+
+    fn write_query() -> WriteQuery {
+        map_to_query(log_event())
+    }
+
+    fn influx_config() -> anyhow::Result<InfluxConfig> {
+        InfluxConfig::new(
             "http://localhost:8086".to_string(),
             "test_db".to_string(),
             Some("user".to_string()),
             Some("password".to_string()),
             None,
-        )?;
+        )
+    }
 
+    #[tokio::test]
+    async fn test_influxdb_writer_internal() -> anyhow::Result<()> {
         let mut mock_client = Box::new(MockInfluxClient::new());
         mock_client
             .expect_write_all()
@@ -233,21 +249,61 @@ mod tests {
             .returning(|_| Ok("test_data".to_string()));
 
         // Run the `influxdb_writer` function
-        let (tx, join_handle) = spawn_influxdb_writer_internal(mock_client, influx_config);
+        let (tx, join_handle) = spawn_influxdb_writer_internal(mock_client, influx_config()?);
 
         // Send a test query
-        let log_event = LogEvent::new_value_from_ref(
-            "test".to_string(),
-            0i64,
-            vec![].into_iter().collect(),
-            Number::Float(1.23),
-        );
-        tx.send(log_event)?;
+        tx.send(log_event())?;
 
         // Close the channel
         drop(tx);
 
         join_handle.await.expect("stopped writer");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_influxdb_writer_direct_write() -> anyhow::Result<()> {
+        let mut mock_client = Box::new(MockInfluxClient::new());
+        mock_client
+            .expect_write_all()
+            .times(1)
+            .with(function(|points: &Vec<WriteQuery>| points.len() == 1))
+            .returning(|_| Ok("test_data".to_string()));
+
+        let mut writer = Writer::new(mock_client, influx_config()?, Duration::from_secs(0));
+
+        writer.queue(write_query()).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_influxdb_writer_batch_write() -> anyhow::Result<()> {
+        let mut mock_client = Box::new(MockInfluxClient::new());
+        mock_client
+            .expect_write_all()
+            .times(0)
+            .returning(|_| Ok("test_data".to_string()));
+
+        let mut writer = Writer::new(mock_client, influx_config()?, Duration::from_secs(5));
+
+        writer.queue(write_query()).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_influxdb_writer_forced_batch_write() -> anyhow::Result<()> {
+        let mut mock_client = Box::new(MockInfluxClient::new());
+        mock_client
+            .expect_write_all()
+            .times(1)
+            .with(function(|points: &Vec<WriteQuery>| points.len() == 1))
+            .returning(|_| Ok("test_data".to_string()));
+
+        let mut writer = Writer::new(mock_client, influx_config()?, Duration::from_secs(5));
+
+        writer.queue(write_query()).await;
+        writer.flush().await;
 
         Ok(())
     }
