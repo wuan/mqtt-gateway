@@ -22,7 +22,6 @@ async-trait = "^0.1"
 log = "^0.4"
 tokio = { version = "^1.47", features = ["rt", "rt-multi-thread", "macros"] }
 async-channel = "1.9.0"
-url = "^2.5"
 
 [dev-dependencies]
 mockall = "^0.13"

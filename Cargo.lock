@@ -1220,7 +1220,6 @@ dependencies = [
  "smol",
  "time",
  "tokio",
- "url",
 ]
 
 [[package]]
