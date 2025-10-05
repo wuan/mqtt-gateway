@@ -51,6 +51,10 @@ impl CheckMessage for OpenMqttGatewayLogger {
             }
         }
     }
+
+    fn checked_count(&self) -> u64 {
+        0
+    }
 }
 
 fn parse_json(payload: &str) -> Result<Map<String, Value>> {

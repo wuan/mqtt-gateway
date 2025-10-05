@@ -122,6 +122,10 @@ impl CheckMessage for ShellyLogger {
             handle_message(msg, &self.txs, COVER_FIELDS);
         }
     }
+
+    fn checked_count(&self) -> u64 {
+       0 
+    }
 }
 
 fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenamed>(

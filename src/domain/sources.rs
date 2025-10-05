@@ -62,12 +62,16 @@ impl Sources {
         let prefix = msg.topic().split("/").next().unwrap();
         trace!("received from {} - {}", msg.topic(), msg.payload_str());
 
-        let handler = self.handler_map.get(prefix);
+        let handler = self.get_handler(prefix);
         if let Some(handler) = handler {
             handler.lock().unwrap().check_message(&msg);
         } else {
             warn!("unhandled prefix {} from topic {}", prefix, msg.topic());
         }
+    }
+
+    pub(crate) fn get_handler(&self, prefix: &str) -> Option<&Arc<Mutex<dyn CheckMessage>>> {
+        self.handler_map.get(prefix)
     }
 
     pub(crate) async fn shutdown(self) {

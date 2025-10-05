@@ -61,6 +61,10 @@ impl CheckMessage for OpenDTULogger {
             }
         }
     }
+
+    fn checked_count(&self) -> u64 {
+        0
+    }
 }
 
 struct OpenDTUParser {

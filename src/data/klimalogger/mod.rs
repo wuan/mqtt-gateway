@@ -91,6 +91,10 @@ impl CheckMessage for SensorLogger {
             warn!("FAILED: {:?}, {:?}, {:?}", location, measurement, &result);
         }
     }
+
+    fn checked_count(&self) -> u64 {
+        0
+    }
 }
 
 pub fn parse(msg: &Message) -> Result<Data> {

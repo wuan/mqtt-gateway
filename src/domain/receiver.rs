@@ -51,6 +51,7 @@ impl Receiver {
 mod tests {
     use super::*;
     use crate::domain::sources::tests::sources;
+    use crate::domain::MockMqttClient;
     use mockall::predicate::*;
     use paho_mqtt::ServerResponse;
 
@@ -82,16 +83,40 @@ mod tests {
 
     #[tokio::test]
     async fn test_listen() {
+        let mqtt_client = mock_mqtt_client("bar/baz");
+        let sources = sources();
+        let handler_ref = sources.get_handler("bar").unwrap().clone();
+        let receiver = Receiver::new(mqtt_client, sources);
+
+        let result = receiver.listen().await;
+
+        assert!(result.is_ok());
+        assert_eq!(handler_ref.lock().unwrap().checked_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_listen_no_matches() {
+        let mqtt_client = mock_mqtt_client("test/test");
+        let sources = sources();
+        let handler_ref = sources.get_handler("bar").unwrap().clone();
+        let receiver = Receiver::new(mqtt_client, sources);
+
+        let result = receiver.listen().await;
+
+        assert!(result.is_ok());
+        assert_eq!(handler_ref.lock().unwrap().checked_count(), 0);
+    }
+
+    fn mock_mqtt_client(topic: &str) -> Box<MockMqttClient> {
         let mut mqtt_client = Box::new(crate::domain::MockMqttClient::new());
-        mqtt_client.expect_create().times(1).returning(|| {
+        let topic_owned = topic.to_string(); // Clone the topic string to ensure ownership
+        mqtt_client.expect_create().times(1).returning(move || {
             let mut stream = Box::new(crate::domain::MockStream::new());
-            stream.expect_next().times(1).returning(|| {
-                Some(Some(paho_mqtt::Message::new(
-                    "test/topic",
-                    "test payload",
-                    0,
-                )))
-            });
+            let topic_clone = topic_owned.clone(); // Clone again for the inner closure
+            stream
+                .expect_next()
+                .times(1)
+                .returning(move || Some(Some(paho_mqtt::Message::new(&topic_clone, "test payload", 0))));
             stream.expect_next().times(1).returning(|| None);
             Ok(stream)
         });
@@ -105,13 +130,9 @@ mod tests {
             )
             .returning(|_, _| Ok(ServerResponse::default()));
 
-        let sources = sources();
-        let receiver = Receiver::new(mqtt_client, sources);
-
-        let result = receiver.listen().await;
-
-        assert!(result.is_ok());
+        mqtt_client
     }
+
     #[tokio::test]
     async fn test_listen_with_error() {
         let mut mqtt_client = Box::new(crate::domain::MockMqttClient::new());

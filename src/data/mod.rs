@@ -8,4 +8,6 @@ pub(crate) mod shelly;
 
 pub trait CheckMessage {
     fn check_message(&mut self, msg: &Message);
+    
+    fn checked_count(&self) -> u64;
 }
