@@ -138,8 +138,10 @@ impl Writer {
         trace!("before write to influx");
         let result = self.influx_client.write_all(self.queries.clone()).await;
         let duration = now.elapsed();
-        debug!(
-            "write to InfluxDB #{} ({:.3} s)",
+        info!(
+            "InfluxDB: {} {} write #{} ({:.3} s)",
+            self.influx_config.url,
+            self.influx_config.database,
             query_count,
             duration.as_secs_f64()
         );
@@ -256,15 +258,9 @@ mod tests {
             .returning(|_| Ok("test_data".to_string()));
 
         // Run the `influxdb_writer` function
-        let influx_config1 = influx_config();
         let (tx, rx) = sync_channel(100);
         let join_handle = tokio::spawn(async move {
-            info!(
-                "starting influx writer {} {}",
-                &influx_config1.url, &influx_config1.database
-            );
-
-            influxdb_writer(rx, mock_client, influx_config1).await;
+            influxdb_writer(rx, mock_client, influx_config()).await;
         });
 
         // Send a test query
