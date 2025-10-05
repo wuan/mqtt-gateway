@@ -113,10 +113,13 @@ mod tests {
         mqtt_client.expect_create().times(1).returning(move || {
             let mut stream = Box::new(crate::domain::MockStream::new());
             let topic_clone = topic_owned.clone(); // Clone again for the inner closure
-            stream
-                .expect_next()
-                .times(1)
-                .returning(move || Some(Some(paho_mqtt::Message::new(&topic_clone, "test payload", 0))));
+            stream.expect_next().times(1).returning(move || {
+                Some(Some(paho_mqtt::Message::new(
+                    &topic_clone,
+                    "test payload",
+                    0,
+                )))
+            });
             stream.expect_next().times(1).returning(|| None);
             Ok(stream)
         });

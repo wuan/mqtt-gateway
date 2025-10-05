@@ -77,7 +77,9 @@ impl CheckMessage for SensorLogger {
             let log_event = LogEvent::new_value_from_ref(
                 measurement.to_string(),
                 date_time.timestamp(),
-                vec![("location", location), ("sensor", &result.sensor)].into_iter().collect(),
+                vec![("location", location), ("sensor", &result.sensor)]
+                    .into_iter()
+                    .collect(),
                 Number::Float(result.value),
             );
 

@@ -177,14 +177,14 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-use super::*;
+    use super::*;
     use log::LevelFilter;
     use paho_mqtt::QOS_1;
     use std::collections::HashMap;
+    use std::io;
+    use std::io::Write;
     use std::sync::mpsc::{sync_channel, Receiver};
     use std::time::Duration;
-    use std::io;
 
     struct WriteAdapter(Arc<Mutex<Vec<u8>>>);
 
@@ -367,7 +367,9 @@ use super::*;
         env_logger::builder()
             .filter_level(LevelFilter::Warn)
             .format(|buf, record| writeln!(buf, "{}: {}", record.level(), record.args()))
-            .target(env_logger::Target::Pipe(Box::new(WriteAdapter(buffer_clone))))
+            .target(env_logger::Target::Pipe(Box::new(WriteAdapter(
+                buffer_clone,
+            ))))
             .is_test(true)
             .try_init()?;
 

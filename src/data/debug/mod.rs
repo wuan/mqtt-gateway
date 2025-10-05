@@ -1,10 +1,9 @@
-
 use crate::config::Target;
 use crate::data::CheckMessage;
 use log::{info, warn};
 use paho_mqtt::Message;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 
 pub struct DebugLogger {
@@ -34,7 +33,9 @@ impl CheckMessage for DebugLogger {
     }
 }
 
-pub fn create_logger(targets: Vec<Target>) -> anyhow::Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
+pub fn create_logger(
+    targets: Vec<Target>,
+) -> anyhow::Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
     if targets.len() > 0 {
         warn!("debug type has targets defined: {:?}", &targets);
     }
