@@ -2,12 +2,12 @@
 use crate::data::LogEvent;
 use crate::Number;
 use async_trait::async_trait;
-use futures::executor::block_on;
+use influxdb::{Client, Timestamp, WriteQuery};
 use log::{info, trace, warn};
 #[cfg(test)]
 use mockall::automock;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use influxdb::{Client, Timestamp, WriteQuery};
+use std::time::Instant;
 use tokio::task::JoinHandle;
 use url::Url;
 
@@ -16,6 +16,7 @@ pub struct InfluxConfig {
     database: String,
     user: Option<String>,
     password: Option<String>,
+    token: Option<String>,
 }
 
 impl InfluxConfig {
@@ -24,12 +25,14 @@ impl InfluxConfig {
         database: String,
         user: Option<String>,
         password: Option<String>,
+        token: Option<String>,
     ) -> anyhow::Result<Self> {
         Ok(Self {
             url: Url::parse(&url)?,
             database,
             user,
             password,
+            token,
         })
     }
 }
@@ -53,16 +56,19 @@ trait InfluxClient: Sync + Send {
 #[async_trait]
 impl InfluxClient for DefaultInfluxClient {
     async fn write(&self, write_query: WriteQuery) -> Result<String, influxdb::Error> {
-        self.client
-            .query(write_query)
-            .await
+        self.client.query(write_query).await
     }
 }
 
 fn create_influxdb_client(influx_config: &InfluxConfig) -> anyhow::Result<Box<dyn InfluxClient>> {
-    let mut influx_client = Client::new(influx_config.url.clone(), influx_config.database.clone());
+    let mut influx_client = Client::new(
+        influx_config.url.to_string().clone(),
+        influx_config.database.clone(),
+    );
 
-    influx_client = if let (Some(user), Some(password)) =
+    influx_client = if let Some(token) = influx_config.token.clone() {
+        influx_client.with_token(token)
+    } else if let (Some(user), Some(password)) =
         (influx_config.user.clone(), influx_config.password.clone())
     {
         influx_client.with_auth(user, password)
@@ -78,41 +84,37 @@ async fn influxdb_writer(
     influx_client: Box<dyn InfluxClient>,
     influx_config: InfluxConfig,
 ) {
-    println!("influxdb_writer");
-    block_on(async move {
-        info!(
-            "starting influx writer async {} {}",
-            &influx_config.url, &influx_config.database
-        );
+    info!(
+        "starting influx writer async {} {}",
+        &influx_config.url, &influx_config.database
+    );
 
-        loop {
-            let result = rx.recv();
-            let data = match result {
-                Ok(query) => query,
-                Err(error) => {
-                    warn!("error receiving query: {:?}", error);
-                    break;
-                }
-            };
-            let query = map_to_point(data);
-            info!("write to influx");
-            // let result = influx_client.write(query).await;
-            let result :Result<String, influxdb::Error> = Ok("asdf".to_string());
-            info!("done");
-            match result {
-                Ok(_) => {}
-                Err(error) => {
-                    panic!(
-                        "#### Error writing to influx: {} {}: {:?}",
-                        &influx_config.url, &influx_config.database, error
-                    );
-                }
+    loop {
+        let result = rx.recv();
+        let data = match result {
+            Ok(query) => query,
+            Err(error) => {
+                warn!("error receiving query: {:?}", error);
+                break;
+            }
+        };
+        let query = map_to_point(data);
+        trace!("before write to influx");
+        let start = Instant::now();
+        let result = influx_client.write(query).await;
+        let duration = start.elapsed();
+        info!("write to InfluxDB ({:.2})", duration.as_secs_f64());
+        match result {
+            Ok(_) => {}
+            Err(error) => {
+                panic!(
+                    "#### Error writing to influx: {} {}: {:?}",
+                    &influx_config.url, &influx_config.database, error
+                );
             }
         }
-        info!("exiting influx writer async");
-    });
-
-    info!("exiting influx writer");
+    }
+    info!("exiting influx writer async");
 }
 
 pub fn spawn_influxdb_writer(
@@ -145,7 +147,10 @@ fn spawn_influxdb_writer_internal(
 }
 
 pub fn map_to_point(log_event: LogEvent) -> WriteQuery {
-    let mut write_query = WriteQuery::new(Timestamp::Seconds(log_event.timestamp as u128), log_event.measurement);
+    let mut write_query = WriteQuery::new(
+        Timestamp::Seconds(log_event.timestamp as u128),
+        log_event.measurement,
+    );
     for (tag, value) in log_event.tags {
         write_query = write_query.add_tag(tag, value);
     }
@@ -164,7 +169,6 @@ pub fn map_to_point(log_event: LogEvent) -> WriteQuery {
 
 #[cfg(test)]
 mod tests {
-    use futures::StreamExt;
     use super::*;
     use crate::Number;
 
@@ -190,17 +194,25 @@ mod tests {
             "test_db".to_string(),
             Some("user".to_string()),
             Some("password".to_string()),
+            None,
         )?;
 
         let mut mock_client = Box::new(MockInfluxClient::new());
-        mock_client.expect_write().times(1).returning(|_| Ok("test_data".to_string()));
+        mock_client
+            .expect_write()
+            .times(1)
+            .returning(|_| Ok("test_data".to_string()));
 
         // Run the `influxdb_writer` function
-        let (tx, join_handle) =
-            spawn_influxdb_writer_internal(mock_client, influx_config);
+        let (tx, join_handle) = spawn_influxdb_writer_internal(mock_client, influx_config);
 
         // Send a test query
-        let log_event = LogEvent::new_value_from_ref("test".to_string(), 0i64, vec![].into_iter().collect(), Number::Float(1.23));
+        let log_event = LogEvent::new_value_from_ref(
+            "test".to_string(),
+            0i64,
+            vec![].into_iter().collect(),
+            Number::Float(1.23),
+        );
         tx.send(log_event).unwrap();
 
         // Close the channel

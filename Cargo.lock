@@ -1208,7 +1208,6 @@ dependencies = [
  "async-trait",
  "chrono",
  "env_logger",
- "futures",
  "influxdb",
  "log",
  "mockall",

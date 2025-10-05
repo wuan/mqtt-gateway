@@ -2,8 +2,7 @@ use std::sync::mpsc::SyncSender;
 
 use crate::config::Target;
 use crate::data::{CheckMessage, LogEvent};
-use crate::target::influx;
-use crate::target::influx::InfluxConfig;
+use crate::target::create_targets;
 use crate::Number;
 use anyhow::Result;
 use chrono::Datelike;
@@ -44,7 +43,7 @@ impl CheckMessage for OpenDTULogger {
             let month_string = timestamp.month().to_string();
             let year_string = timestamp.year().to_string();
             let year_month_string = format!("{:04}-{:02}", timestamp.year(), timestamp.month());
-            
+
             let mut tags: Vec<(&str, &str)> = vec![
                 ("device", &data.device),
                 ("component", &data.component),
@@ -209,29 +208,10 @@ mod tests {
     }
 }
 
-pub fn create_logger(targets: Vec<Target>) -> Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
-    let mut txs: Vec<SyncSender<LogEvent>> = Vec::new();
-    let mut handles: Vec<JoinHandle<()>> = Vec::new();
+pub fn create_logger(
+    targets: Vec<Target>,
+) -> Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
+    let (txs, handles) = create_targets(targets)?;
 
-    for target in targets {
-        let (tx, handle) = match target {
-            Target::InfluxDB {
-                url,
-                database,
-                user,
-                password,
-            } => influx::spawn_influxdb_writer(
-                InfluxConfig::new(url, database, user, password)?,
-            ),
-            Target::Postgresql { .. } => {
-                panic!("Postgresql not supported for opendtu");
-            }
-        };
-        txs.push(tx);
-        handles.push(handle);
-    }
-
-    let logger = OpenDTULogger::new(txs);
-
-    Ok((Arc::new(Mutex::new(logger)), handles))
+    Ok((Arc::new(Mutex::new(OpenDTULogger::new(txs))), handles))
 }

@@ -6,8 +6,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use crate::config::Target;
 use crate::data::{shelly, CheckMessage, LogEvent};
-use crate::target::influx;
-use crate::target::influx::InfluxConfig;
+use crate::target::create_targets;
 use crate::Number;
 use anyhow::Result;
 use data::{CoverData, SwitchData};
@@ -123,7 +122,7 @@ impl CheckMessage for ShellyLogger {
     }
 
     fn checked_count(&self) -> u64 {
-       0 
+        0
     }
 }
 
@@ -195,12 +194,16 @@ mod tests {
 
     impl EventAssert {
         fn new(tags: Vec<(&str, &str)>) -> Self {
-            Self {
-                tags: to_map(tags)
-            }
+            Self { tags: to_map(tags) }
         }
 
-        fn assert(&self, log_event: LogEvent, measurement: &str, tags: Vec<(&str, &str)>, number: Number) {
+        fn assert(
+            &self,
+            log_event: LogEvent,
+            measurement: &str,
+            tags: Vec<(&str, &str)>,
+            number: Number,
+        ) {
             let mut expected = self.tags.clone();
             expected.extend(to_map(tags));
 
@@ -213,9 +216,10 @@ mod tests {
     }
 
     fn to_map(tags: Vec<(&str, &str)>) -> HashMap<String, String> {
-        tags.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        tags.into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
-
 
     #[test]
     fn test_handle_switch_message() -> Result<()> {
@@ -234,15 +238,42 @@ mod tests {
         );
         logger.check_message(&message);
 
-        let event_assert = EventAssert::new(
-            vec![("location", "loo-fan"), ("sensor", "shelly"), ("channel", "1") ],
-        );
+        let event_assert = EventAssert::new(vec![
+            ("location", "loo-fan"),
+            ("sensor", "shelly"),
+            ("channel", "1"),
+        ]);
         event_assert.assert(next(&rx)?, "output", vec![("unit", "bool")], Number::Int(0));
-        event_assert.assert(next(&rx)?, "power", vec![("unit", "W")], Number::Float(0f64));
-        event_assert.assert(next(&rx)?, "current", vec![("unit", "A")], Number::Float(3.1));
-        event_assert.assert(next(&rx)?, "voltage", vec![("unit", "V")], Number::Float(226.5));
-        event_assert.assert(next(&rx)?, "total_energy", vec![("unit", "Wh")], Number::Float(1094.865));
-        event_assert.assert(next(&rx)?, "temperature", vec![("unit", "°C")], Number::Float(36.40));
+        event_assert.assert(
+            next(&rx)?,
+            "power",
+            vec![("unit", "W")],
+            Number::Float(0f64),
+        );
+        event_assert.assert(
+            next(&rx)?,
+            "current",
+            vec![("unit", "A")],
+            Number::Float(3.1),
+        );
+        event_assert.assert(
+            next(&rx)?,
+            "voltage",
+            vec![("unit", "V")],
+            Number::Float(226.5),
+        );
+        event_assert.assert(
+            next(&rx)?,
+            "total_energy",
+            vec![("unit", "Wh")],
+            Number::Float(1094.865),
+        );
+        event_assert.assert(
+            next(&rx)?,
+            "temperature",
+            vec![("unit", "°C")],
+            Number::Float(36.40),
+        );
 
         assert!(next(&rx).is_err());
         Ok(())
@@ -266,15 +297,48 @@ mod tests {
         );
         logger.check_message(&message);
 
-        let event_assert = EventAssert::new(
-            vec![("sensor", "shelly"), ("location", "bedroom-curtain"), ("type", "cover"), ("channel", "0")],
+        let event_assert = EventAssert::new(vec![
+            ("sensor", "shelly"),
+            ("location", "bedroom-curtain"),
+            ("type", "cover"),
+            ("channel", "0"),
+        ]);
+        event_assert.assert(
+            next(&rx)?,
+            "position",
+            vec![("unit", "%")],
+            Number::Int(100),
         );
-        event_assert.assert(next(&rx)?, "position", vec![("unit", "%")], Number::Int(100));
-        event_assert.assert(next(&rx)?, "power", vec![("unit", "W")], Number::Float(0f64));
-        event_assert.assert(next(&rx)?, "current", vec![("unit", "A")], Number::Float(0.5));
-        event_assert.assert(next(&rx)?, "voltage", vec![("unit", "V")], Number::Float(231.7));
-        event_assert.assert(next(&rx)?, "total_energy", vec![("unit", "Wh")], Number::Float(3.143));
-        event_assert.assert(next(&rx)?, "temperature", vec![("unit", "°C")], Number::Float(30.7));
+        event_assert.assert(
+            next(&rx)?,
+            "power",
+            vec![("unit", "W")],
+            Number::Float(0f64),
+        );
+        event_assert.assert(
+            next(&rx)?,
+            "current",
+            vec![("unit", "A")],
+            Number::Float(0.5),
+        );
+        event_assert.assert(
+            next(&rx)?,
+            "voltage",
+            vec![("unit", "V")],
+            Number::Float(231.7),
+        );
+        event_assert.assert(
+            next(&rx)?,
+            "total_energy",
+            vec![("unit", "Wh")],
+            Number::Float(3.143),
+        );
+        event_assert.assert(
+            next(&rx)?,
+            "temperature",
+            vec![("unit", "°C")],
+            Number::Float(30.7),
+        );
         assert!(next(&rx).is_err());
 
         Ok(())
@@ -355,26 +419,7 @@ mod tests {
 pub fn create_logger(
     targets: Vec<Target>,
 ) -> Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
-    let mut txs: Vec<SyncSender<LogEvent>> = Vec::new();
-    let mut handles: Vec<JoinHandle<()>> = Vec::new();
-
-    for target in targets {
-        let (tx, handle) = match target {
-            Target::InfluxDB {
-                url,
-                database,
-                user,
-                password,
-            } => influx::spawn_influxdb_writer(
-                InfluxConfig::new(url, database, user, password)?,
-            ),
-            Target::Postgresql { .. } => {
-                panic!("Postgresql not supported for shelly");
-            }
-        };
-        txs.push(tx);
-        handles.push(handle);
-    }
+    let (txs, handles) = create_targets(targets)?;
 
     Ok((Arc::new(Mutex::new(ShellyLogger::new(txs))), handles))
 }

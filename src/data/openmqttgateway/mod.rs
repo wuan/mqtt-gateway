@@ -3,8 +3,7 @@ use std::sync::mpsc::SyncSender;
 
 use crate::config::Target;
 use crate::data::{CheckMessage, LogEvent};
-use crate::target::influx;
-use crate::target::influx::InfluxConfig;
+use crate::target::create_targets;
 use crate::Number;
 use anyhow::Result;
 use log::warn;
@@ -214,29 +213,13 @@ mod tests {
     }
 }
 
-pub fn create_logger(targets: Vec<Target>) -> Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
-    let mut txs: Vec<SyncSender<LogEvent>> = Vec::new();
-    let mut handles: Vec<JoinHandle<()>> = Vec::new();
+pub fn create_logger(
+    targets: Vec<Target>,
+) -> Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
+    let (txs, handles) = create_targets(targets)?;
 
-    for target in targets {
-        let (tx, handle) = match target {
-            Target::InfluxDB {
-                url,
-                database,
-                user,
-                password,
-            } => influx::spawn_influxdb_writer(
-                InfluxConfig::new(url, database, user, password)?,
-            ),
-            Target::Postgresql { .. } => {
-                panic!("Postgresql not supported for open");
-            }
-        };
-        txs.push(tx);
-        handles.push(handle);
-    }
-
-    let logger = OpenMqttGatewayLogger::new(txs);
-
-    Ok((Arc::new(Mutex::new(logger)), handles))
+    Ok((
+        Arc::new(Mutex::new(OpenMqttGatewayLogger::new(txs))),
+        handles,
+    ))
 }
