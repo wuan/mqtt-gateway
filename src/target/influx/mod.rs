@@ -1,7 +1,7 @@
 use crate::data::LogEvent;
 use crate::Number;
 use async_trait::async_trait;
-use influxdb::{Client, Error, Timestamp, WriteQuery};
+use influxdb::{Client, Error, Query, Timestamp, WriteQuery};
 use log::{debug, info, trace, warn};
 #[cfg(test)]
 use mockall::automock;
@@ -71,12 +71,15 @@ fn create_influxdb_client(influx_config: &InfluxConfig) -> anyhow::Result<Box<dy
     );
 
     influx_client = if let Some(token) = influx_config.token.clone() {
+        info!("InfluxDB: Using token");
         influx_client.with_token(token)
     } else if let (Some(user), Some(password)) =
         (influx_config.user.clone(), influx_config.password.clone())
     {
+        info!("InfluxDB: Using username {} and password", &user);
         influx_client.with_auth(user, password)
     } else {
+        info!("InfluxDB: No authentication");
         influx_client
     };
 
@@ -142,7 +145,9 @@ impl Writer {
             duration.as_secs_f64()
         );
         match result {
-            Ok(_) => {}
+            Ok(result) => {
+                info!("InfluxDB: result {}", result);
+            }
             Err(error) => {
                 &self.panic(error);
             }
