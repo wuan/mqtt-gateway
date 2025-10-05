@@ -171,21 +171,6 @@ mod tests {
     use super::*;
     use crate::Number;
 
-    // A mock `WriteQuery` for testing purposes
-    fn mock_write_query(data: String) -> LogEvent {
-        info!("mock write query {}", data);
-
-        assert_eq!(data, "test_data");
-
-        let current_timestamp = chrono::Utc::now().timestamp();
-        LogEvent::new_value_from_ref(
-            "measurement".to_string(),
-            current_timestamp,
-            vec![].into_iter().collect(),
-            Number::Float(1.23),
-        )
-    }
-
     #[tokio::test]
     async fn test_influxdb_writer_internal() -> anyhow::Result<()> {
         let influx_config = InfluxConfig::new(
@@ -212,7 +197,7 @@ mod tests {
             vec![].into_iter().collect(),
             Number::Float(1.23),
         );
-        tx.send(log_event).unwrap();
+        tx.send(log_event)?;
 
         // Close the channel
         drop(tx);
