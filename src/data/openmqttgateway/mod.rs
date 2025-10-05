@@ -11,7 +11,7 @@ use log::warn;
 use paho_mqtt::Message;
 use serde_json::{Map, Value};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use tokio::task::JoinHandle;
 
 struct Data {
     fields: HashMap<String, Number>,
@@ -54,6 +54,10 @@ impl CheckMessage for OpenMqttGatewayLogger {
                 tx.send(log_event.clone()).expect("failed to send");
             }
         }
+    }
+
+    fn checked_count(&self) -> u64 {
+        0
     }
 }
 

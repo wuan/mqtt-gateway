@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-std = "^1.13.2"
+smol = "^2.0"
 futures = "^0.3"
 paho-mqtt = "^0.13"
 env_logger = "^0.11"
@@ -19,9 +19,11 @@ postgres = { version = "^0.19" , features = ["with-chrono-0_4"] }
 serde_yml = { version = "0.0.12", features = [] }
 anyhow = "^1.0"
 regex = "^1.11"
-async-trait = "0.1.89"
-log = "0.4.28"
-url = "2.5.7"
+async-trait = "^0.1"
+log = "^0.4"
+tokio = { version = "^1.47", features = ["rt", "rt-multi-thread", "macros"] }
+async-channel = "1.9.0"
+url = "^2.5"
 
 [dev-dependencies]
 mockall = "^0.13"

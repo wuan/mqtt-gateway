@@ -13,7 +13,7 @@ use log::{debug, warn};
 use paho_mqtt::Message;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use tokio::task::JoinHandle;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Data {
@@ -89,6 +89,10 @@ impl CheckMessage for SensorLogger {
         } else {
             warn!("FAILED: {:?}, {:?}, {:?}", location, measurement, &result);
         }
+    }
+
+    fn checked_count(&self) -> u64 {
+        0
     }
 }
 

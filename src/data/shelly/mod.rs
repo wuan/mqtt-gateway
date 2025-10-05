@@ -15,7 +15,7 @@ use log::{debug, warn};
 use paho_mqtt::Message;
 use regex::Regex;
 use serde::Deserialize;
-use std::thread::JoinHandle;
+use tokio::task::JoinHandle;
 
 pub trait Timestamped {
     fn timestamp(&self) -> Option<i64>;
@@ -120,6 +120,10 @@ impl CheckMessage for ShellyLogger {
         } else if COVER_REGEX.is_match(topic) {
             handle_message(msg, &self.txs, COVER_FIELDS);
         }
+    }
+
+    fn checked_count(&self) -> u64 {
+       0 
     }
 }
 
