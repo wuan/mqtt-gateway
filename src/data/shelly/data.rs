@@ -6,9 +6,9 @@ use std::fmt;
 pub struct SwitchData {
     pub(crate) output: bool,
     #[serde(rename = "apower")]
-    pub(crate) power: Option<f32>,
-    pub(crate) voltage: Option<f32>,
-    pub(crate) current: Option<f32>,
+    pub(crate) power: Option<f64>,
+    pub(crate) voltage: Option<f64>,
+    pub(crate) current: Option<f64>,
     #[serde(rename = "aenergy")]
     pub(crate) energy: EnergyData,
     pub(crate) temperature: TemperatureData,
@@ -29,11 +29,11 @@ impl Typenamed for SwitchData {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CoverData {
     #[serde(rename = "current_pos")]
-    pub(crate) position: Option<i32>,
+    pub(crate) position: Option<i64>,
     #[serde(rename = "apower")]
-    pub(crate) power: Option<f32>,
-    pub(crate) voltage: Option<f32>,
-    pub(crate) current: Option<f32>,
+    pub(crate) power: Option<f64>,
+    pub(crate) voltage: Option<f64>,
+    pub(crate) current: Option<f64>,
     #[serde(rename = "aenergy")]
     pub(crate) energy: EnergyData,
     pub(crate) temperature: TemperatureData,
@@ -53,7 +53,7 @@ impl Typenamed for CoverData {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct EnergyData {
-    pub(crate) total: f32,
+    pub(crate) total: f64,
     pub(crate) minute_ts: Option<i64>,
 }
 
@@ -66,7 +66,7 @@ impl fmt::Debug for EnergyData {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TemperatureData {
     #[serde(rename = "tC")]
-    pub(crate) t_celsius: f32,
+    pub(crate) t_celsius: f64,
 }
 
 impl fmt::Debug for TemperatureData {

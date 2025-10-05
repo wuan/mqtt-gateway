@@ -32,6 +32,7 @@ pub enum Target {
         database: String,
         user: Option<String>,
         password: Option<String>,
+        token: Option<String>,
     },
     #[serde(rename = "postgresql")]
     Postgresql {

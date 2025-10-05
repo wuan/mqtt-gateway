@@ -3,6 +3,7 @@ use crate::domain::sources::Sources;
 use crate::domain::MqttClientDefault;
 use chrono::{DateTime, Utc};
 use log::{debug, error};
+use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::path::Path;
 use std::process::exit;
@@ -20,12 +21,14 @@ pub struct SensorReading {
     pub time: DateTime<Utc>,
     pub location: String,
     pub sensor: String,
-    pub value: f32,
+    pub value: f64,
 }
 
-pub enum WriteType {
-    Int(i32),
-    Float(f32),
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum Number {
+    Int(i64),
+    Float(f64),
 }
 
 #[tokio::main]
