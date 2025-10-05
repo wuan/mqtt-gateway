@@ -16,7 +16,7 @@ use log::{debug, warn};
 use paho_mqtt::Message;
 use regex::Regex;
 use serde::Deserialize;
-use std::thread::JoinHandle;
+use tokio::task::JoinHandle;
 
 pub trait Timestamped {
     fn timestamp(&self) -> Option<i64>;
@@ -122,6 +122,10 @@ impl CheckMessage for ShellyLogger {
             handle_message(msg, &self.txs, COVER_FIELDS);
         }
     }
+
+    fn checked_count(&self) -> u64 {
+       0 
+    }
 }
 
 fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenamed>(
@@ -133,7 +137,12 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
     let channel = msg.topic().split(":").last().unwrap();
     let parse_result = shelly::parse(msg);
     if parse_result.is_err() {
-        warn!("Shelly parse error: {:?} on '{}' (topic: {})", parse_result.err(), msg.payload_str(), msg.topic());
+        warn!(
+            "Shelly parse error: {:?} on '{}' (topic: {})",
+            parse_result.err(),
+            msg.payload_str(),
+            msg.topic()
+        );
         return;
     }
     let result: Option<T> = parse_result.unwrap();

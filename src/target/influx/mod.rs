@@ -6,8 +6,7 @@ use log::{info, trace, warn};
 #[cfg(test)]
 use mockall::automock;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::thread;
-use std::thread::JoinHandle;
+use tokio::task::JoinHandle;
 
 pub struct InfluxConfig {
     url: String,
@@ -69,12 +68,13 @@ fn create_influxdb_client(influx_config: &InfluxConfig) -> anyhow::Result<Box<dy
     Ok(Box::new(DefaultInfluxClient::new(influx_client)))
 }
 
-fn influxdb_writer<T>(
+async fn influxdb_writer<T>(
     rx: Receiver<T>,
     influx_client: Box<dyn InfluxClient>,
     influx_config: InfluxConfig,
     query_mapper: fn(T) -> WriteQuery,
 ) {
+    println!("influxdb_writer");
     block_on(async move {
         info!(
             "starting influx writer async {} {}",
@@ -125,16 +125,18 @@ fn spawn_influxdb_writer_internal<T: Send + 'static>(
     query_mapper: fn(T) -> WriteQuery,
 ) -> (SyncSender<T>, JoinHandle<()>) {
     let (tx, rx) = sync_channel(100);
+    println!("Spawn influx writer async");
 
     (
         tx,
-        thread::spawn(move || {
+        tokio::spawn(async move {
+            println!("starting influx writer async");
             info!(
                 "starting influx writer {} {}",
                 &influx_config.url, &influx_config.database
             );
 
-            influxdb_writer(rx, influx_client, influx_config, query_mapper)
+            influxdb_writer(rx, influx_client, influx_config, query_mapper).await;
         }),
     )
 }
@@ -155,9 +157,8 @@ mod tests {
             .add_field("field", influxdb::Type::Float(1.23))
     }
 
-    //
-    #[test]
-    fn test_influxdb_writer_internal() -> anyhow::Result<()> {
+    #[tokio::test]
+    async fn test_influxdb_writer_internal() -> anyhow::Result<()> {
         let influx_config = InfluxConfig::new(
             "http://localhost:8086".to_string(),
             "test_db".to_string(),
@@ -181,7 +182,7 @@ mod tests {
         // Close the channel
         drop(tx);
 
-        join_handle.join().expect("stopped writer");
+        join_handle.await.expect("stopped writer");
 
         Ok(())
     }

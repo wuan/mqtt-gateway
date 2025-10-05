@@ -1,32 +1,20 @@
-use std::fmt;
-
 use crate::config::Target;
 use crate::data::CheckMessage;
 use log::{info, warn};
 use paho_mqtt::Message;
-use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::task::JoinHandle;
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct Data {
-    #[serde(rename = "time")]
-    pub(crate) timestamp: i32,
-    pub(crate) value: f32,
-    pub(crate) sensor: String,
+pub struct DebugLogger {
+    checked_count: AtomicU64,
 }
-
-impl fmt::Debug for Data {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} (@{}, {})", self.value, self.timestamp, self.sensor)
-    }
-}
-
-pub struct DebugLogger {}
 
 impl DebugLogger {
     pub(crate) fn new() -> Self {
-        DebugLogger {}
+        DebugLogger {
+            checked_count: AtomicU64::new(0),
+        }
     }
 }
 
@@ -35,7 +23,13 @@ impl CheckMessage for DebugLogger {
         let topic = msg.topic();
         let payload = msg.payload_str();
 
+        self.checked_count.fetch_add(1, Ordering::SeqCst);
+
         info!("'{}' with {}", topic, payload);
+    }
+
+    fn checked_count(&self) -> u64 {
+        self.checked_count.load(Ordering::SeqCst)
     }
 }
 
