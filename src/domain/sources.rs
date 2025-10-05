@@ -47,7 +47,7 @@ impl Sources {
 
     pub(crate) async fn subscribe(
         &self,
-        mqtt_client: &MqttClient,
+        mqtt_client: &Box<dyn MqttClient>,
     ) -> anyhow::Result<ServerResponse> {
         info!("Subscribing to topics: {:?}", &self.topics);
         mqtt_client

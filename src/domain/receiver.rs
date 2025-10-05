@@ -5,12 +5,12 @@ use smol::Timer;
 use std::time::Duration;
 
 pub(crate) struct Receiver {
-    mqtt_client: MqttClient,
+    mqtt_client: Box<dyn MqttClient>,
     sources: Sources,
 }
 
 impl Receiver {
-    pub(crate) fn new(mqtt_client: MqttClient, sources: Sources) -> Self {
+    pub(crate) fn new(mqtt_client: Box<dyn MqttClient>, sources: Sources) -> Self {
         Self {
             mqtt_client,
             sources,

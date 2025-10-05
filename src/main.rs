@@ -1,6 +1,6 @@
 use crate::domain::receiver::Receiver;
 use crate::domain::sources::Sources;
-use crate::domain::MqttClient;
+use crate::domain::MqttClientDefault;
 use chrono::{DateTime, Utc};
 use log::{debug, error};
 use std::fmt::Debug;
@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mqtt_client = source::mqtt::create_mqtt_client(config.mqtt_url, config.mqtt_client_id);
 
-    let receiver = Receiver::new(MqttClient::new(mqtt_client), Sources::new(config.sources));
+    let receiver = Receiver::new(Box::new(MqttClientDefault::new(mqtt_client)), Sources::new(config.sources));
     receiver.listen().await
 }
 

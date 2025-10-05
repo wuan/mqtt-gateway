@@ -1,21 +1,37 @@
 use paho_mqtt::{AsyncClient, Message, ServerResponse};
 use std::time::Duration;
-
+use async_trait::async_trait;
+#[cfg(test)]
+use mockall::automock;
 use paho_mqtt as mqtt;
 use smol::stream::StreamExt;
 
 pub(crate) mod receiver;
 pub(crate) mod sources;
 
-pub(crate) struct MqttClient {
+
+#[cfg_attr(test, automock)]
+#[async_trait]
+pub(crate) trait MqttClient: Sync + Send {
+    async fn connect(&self) -> anyhow::Result<ServerResponse>;
+    async fn subscribe_many(&self, topics: &Vec<String>, qoss: &Vec<i32>) -> anyhow::Result<ServerResponse>;
+    async fn create(&mut self) -> anyhow::Result<Stream>;
+    fn is_connected(&self) -> bool;
+    async fn reconnect(&self) -> anyhow::Result<ServerResponse>;
+}
+
+pub(crate) struct MqttClientDefault {
     mqtt_client: AsyncClient,
 }
 
-impl MqttClient {
+impl MqttClientDefault {
     pub(crate) fn new(mqtt_client: AsyncClient) -> Self {
         Self { mqtt_client }
     }
+}
 
+#[async_trait]
+impl MqttClient for MqttClientDefault {
     async fn connect(&self) -> anyhow::Result<ServerResponse> {
         let conn_opts = mqtt::ConnectOptionsBuilder::new_v5()
             .keep_alive_interval(Duration::from_secs(30))
@@ -28,7 +44,8 @@ impl MqttClient {
             .await
             .map_err(anyhow::Error::from)
     }
-    pub(crate) async fn subscribe_many(
+
+    async fn subscribe_many(
         &self,
         topics: &Vec<String>,
         qoss: &Vec<i32>,
@@ -47,11 +64,11 @@ impl MqttClient {
         Ok(Stream::new(strm))
     }
 
-    pub(crate) fn is_connected(&self) -> bool {
+    fn is_connected(&self) -> bool {
         self.mqtt_client.is_connected()
     }
 
-    pub(crate) async fn reconnect(&self) -> anyhow::Result<ServerResponse> {
+    async fn reconnect(&self) -> anyhow::Result<ServerResponse> {
         self.mqtt_client
             .reconnect()
             .await
@@ -59,7 +76,7 @@ impl MqttClient {
     }
 }
 
-struct Stream {
+pub(crate) struct Stream {
     stream: async_channel::Receiver<Option<Message>>,
 }
 
