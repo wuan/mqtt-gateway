@@ -39,7 +39,7 @@ impl MqttClient {
             .map_err(anyhow::Error::from)
     }
 
-    pub(crate) async fn create(&mut self) -> anyhow::Result<Stream> {
+    async fn create(&mut self) -> anyhow::Result<Stream> {
         let strm = self.mqtt_client.get_stream(None);
 
         self.connect().await?;

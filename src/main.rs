@@ -1,19 +1,12 @@
-use crate::data::{debug, openmqttgateway, CheckMessage};
 use crate::domain::receiver::Receiver;
 use crate::domain::sources::Sources;
 use crate::domain::MqttClient;
 use chrono::{DateTime, Utc};
-use futures::stream::StreamExt;
-use log::{debug, error, info, trace, warn};
-use paho_mqtt::{AsyncClient, Message, ServerResponse, QOS_1};
-use smol::Timer;
-use std::collections::HashMap;
+use log::{debug, error};
 use std::fmt::Debug;
 use std::path::Path;
 use std::process::exit;
-use std::sync::{Arc, Mutex};
-use std::{env, fs, time::Duration};
-use tokio::task::JoinHandle;
+use std::{env, fs};
 
 mod config;
 mod data;
