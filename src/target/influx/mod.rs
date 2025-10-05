@@ -183,7 +183,6 @@ pub fn spawn_influxdb_writer(
     let influx_client =
         create_influxdb_client(&influx_config).expect("could not create influxdb client");
     let (tx, rx) = sync_channel(100);
-    println!("Spawn influx writer async");
 
     (
         tx,
@@ -258,19 +257,15 @@ mod tests {
 
         // Run the `influxdb_writer` function
         let influx_config1 = influx_config();
-        let (tx1, rx) = sync_channel(100);
-        println!("Spawn influx writer async");
-        let (tx, join_handle) = (
-            tx1,
-            tokio::spawn(async move {
-                info!(
-                    "starting influx writer {} {}",
-                    &influx_config1.url, &influx_config1.database
-                );
+        let (tx, rx) = sync_channel(100);
+        let join_handle = tokio::spawn(async move {
+            info!(
+                "starting influx writer {} {}",
+                &influx_config1.url, &influx_config1.database
+            );
 
-                influxdb_writer(rx, mock_client, influx_config1).await;
-            }),
-        );
+            influxdb_writer(rx, mock_client, influx_config1).await;
+        });
 
         // Send a test query
         tx.send(log_event())?;
