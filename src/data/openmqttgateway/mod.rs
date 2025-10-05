@@ -103,10 +103,11 @@ impl OpenMqttGatewayParser {
                     }
                 }
 
-                if fields.contains_key("rssi") && fields.len() == 1 && tags.len() == base_tag_count {
-                    tags.insert(String::from("type"),String::from("NONE"));
+                if fields.contains_key("rssi") && fields.len() == 1 && tags.len() == base_tag_count
+                {
+                    tags.insert(String::from("type"), String::from("NONE"));
                 } else if !tags.contains_key("type") {
-                    tags.insert(String::from("type"),String::from("UNKN"));
+                    tags.insert(String::from("type"), String::from("UNKN"));
                 }
                 if fields.len() > 0 {
                     data = Some(Data { fields, tags });

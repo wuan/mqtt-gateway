@@ -68,7 +68,10 @@ impl CheckMessage for SensorLogger {
             );
 
             if difference.num_seconds() > MAX_TIME_OFFSET_SECONDS {
-                warn!("*** HIGH TIME OFFSET *** {} : {} - {}", log_message, now, date_time);
+                warn!(
+                    "*** HIGH TIME OFFSET *** {} : {} - {}",
+                    log_message, now, date_time
+                );
                 return;
             }
 

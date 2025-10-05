@@ -166,7 +166,7 @@ mod tests {
         tx.send(sensor_reading).unwrap();
 
         drop(tx);
-        
+
         let _ = join_handle.await;
 
         Ok(())

@@ -133,7 +133,12 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
     let channel = msg.topic().split(":").last().unwrap();
     let parse_result = shelly::parse(msg);
     if parse_result.is_err() {
-        warn!("Shelly parse error: {:?} on '{}' (topic: {})", parse_result.err(), msg.payload_str(), msg.topic());
+        warn!(
+            "Shelly parse error: {:?} on '{}' (topic: {})",
+            parse_result.err(),
+            msg.payload_str(),
+            msg.topic()
+        );
         return;
     }
     let result: Option<T> = parse_result.unwrap();
