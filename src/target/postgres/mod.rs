@@ -1,4 +1,4 @@
-use crate::SensorReading;
+use crate::{Number};
 use futures::executor::block_on;
 use log::{error, info, warn};
 #[cfg(test)]
@@ -8,6 +8,7 @@ use postgres::Client;
 use postgres::{Error, NoTls};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use tokio::task::JoinHandle;
+use crate::data::LogEvent;
 
 pub struct PostgresConfig {
     host: String,
@@ -62,7 +63,7 @@ impl PostgresClient for DefaultPostgresClient {
     }
 }
 
-async fn start_postgres_writer(rx: Receiver<SensorReading>, mut client: Box<dyn PostgresClient>) {
+async fn start_postgres_writer(rx: Receiver<LogEvent>, mut client: Box<dyn PostgresClient>) {
     block_on(async move {
         info!("starting postgres writer async");
 
@@ -80,9 +81,14 @@ async fn start_postgres_writer(rx: Receiver<SensorReading>, mut client: Box<dyn 
                 "insert into \"{}\" (time, location, sensor, value) values ($1, $2, $3, $4);",
                 query.measurement
             );
+            let x1 = query.fields.get("value").unwrap();
+            let value = match x1 {
+                Number::Int(value) => &(*value as f64),
+                Number::Float(value) => value,
+            };
             let x = client.execute(
                 &statement,
-                &[&query.time, &query.location, &query.sensor, &query.value],
+                &[&query.timestamp, &query.tags.get("location").unwrap(), &query.tags.get("sensor").unwrap(), value],
             );
 
             match x {
@@ -103,7 +109,7 @@ async fn start_postgres_writer(rx: Receiver<SensorReading>, mut client: Box<dyn 
 
 pub fn spawn_postgres_writer(
     config: PostgresConfig,
-) -> (SyncSender<SensorReading>, JoinHandle<()>) {
+) -> (SyncSender<LogEvent>, JoinHandle<()>) {
     let client = create_postgres_client(&config);
     spawn_postgres_writer_internal(client)
 }
@@ -122,7 +128,7 @@ fn create_postgres_client(config: &PostgresConfig) -> Box<dyn PostgresClient> {
 
 pub fn spawn_postgres_writer_internal(
     client: Box<dyn PostgresClient>,
-) -> (SyncSender<SensorReading>, JoinHandle<()>) {
+) -> (SyncSender<LogEvent>, JoinHandle<()>) {
     let (tx, rx) = sync_channel(100);
 
     (
@@ -140,21 +146,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_postgres_writer_internal() -> anyhow::Result<()> {
-        let sensor_reading = SensorReading {
-            measurement: "measurement".to_string(),
-            time: chrono::Utc::now(),
-            location: "location".to_string(),
-            sensor: "sensor".to_string(),
-            value: 123.4,
-        };
+        let log_event = LogEvent::new_value_from_ref("test".to_string(), 0i64, vec![("location", "location"), ("sensor", "BME680")].into_iter().collect(), Number::Float(1.23));
 
-        let sensor_reading_duplicate = sensor_reading.clone();
+        let sensor_reading_duplicate = log_event.clone();
 
         let mut mock_client = Box::new(MockPostgresClient::new());
         mock_client.expect_execute()
             .times(1)
             .withf(move |query, parameters| {
-                let expected_parameters: [&dyn ToSql; 4] = [&sensor_reading_duplicate.time, &sensor_reading_duplicate.location, &sensor_reading_duplicate.sensor, &sensor_reading_duplicate.value];
+                let expected_parameters: [&dyn ToSql; 4] = [&sensor_reading_duplicate.timestamp, &"location", &"BME680", &1.23];
                 query == "insert into \"measurement\" (time, location, sensor, value) values ($1, $2, $3, $4);" ||
                     parameters.len() == expected_parameters.len() &&
                         parameters.iter().zip(expected_parameters.iter()).all(|(a, b)| format!("{a:?}") == format!("{b:?}"))
@@ -163,7 +163,7 @@ mod tests {
 
         let (tx, join_handle) = spawn_postgres_writer_internal(mock_client);
 
-        tx.send(sensor_reading).unwrap();
+        tx.send(log_event).unwrap();
 
         drop(tx);
 

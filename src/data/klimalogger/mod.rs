@@ -6,7 +6,7 @@ use crate::data::{CheckMessage, LogEvent};
 use crate::target::influx;
 use crate::target::influx::InfluxConfig;
 use crate::target::postgres::PostgresConfig;
-use crate::{target, Number, SensorReading};
+use crate::{target, Number};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use log::{debug, warn};
@@ -30,11 +30,11 @@ impl fmt::Debug for Data {
 }
 
 pub struct SensorLogger {
-    txs: Vec<SyncSender<SensorReading>>,
+    txs: Vec<SyncSender<LogEvent>>,
 }
 
 impl SensorLogger {
-    pub(crate) fn new(tx: Vec<SyncSender<SensorReading>>) -> Self {
+    pub(crate) fn new(tx: Vec<SyncSender<LogEvent>>) -> Self {
         SensorLogger { txs: tx }
     }
 
@@ -75,16 +75,11 @@ impl CheckMessage for SensorLogger {
             }
 
             debug!("{}", log_message);
-            let sensor_reading = SensorReading {
-                measurement: measurement.to_string(),
-                time: date_time,
-                location: location.to_string(),
-                sensor: result.sensor.to_string(),
-                value: result.value,
-            };
+
+            let log_event = LogEvent::new_value_from_ref(measurement.to_string(), date_time.timestamp(), vec!(("location", location)).into_iter().collect(), Number::Float(result.value));
 
             for tx in &self.txs {
-                tx.send(sensor_reading.clone()).expect("failed to send");
+                tx.send(log_event.clone()).expect("failed to send");
             }
         } else {
             warn!("FAILED: {:?}, {:?}, {:?}", location, measurement, &result);
@@ -158,9 +153,9 @@ mod tests {
 
         let result = rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
 
-        assert_eq!(result.location, "location");
-        assert_eq!(result.measurement, "temperature");
-        assert_eq!(result.sensor, "BME680");
+        assert_eq!(result.tags.get("location").unwrap(), "location");
+        assert_eq!(result.tags.get("measurement").unwrap(), "temperature");
+        assert_eq!(result.tags.get("sensor").unwrap(), "BME680");
 
         Ok(())
     }
@@ -187,7 +182,7 @@ mod tests {
 }
 
 pub fn create_logger(targets: Vec<Target>) -> Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
-    let mut txs: Vec<SyncSender<SensorReading>> = Vec::new();
+    let mut txs: Vec<SyncSender<LogEvent>> = Vec::new();
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
     for target in targets {
@@ -198,21 +193,8 @@ pub fn create_logger(targets: Vec<Target>) -> Result<(Arc<Mutex<dyn CheckMessage
                 user,
                 password,
             } => {
-                fn mapper(result: SensorReading) -> LogEvent {
-                    let tags: Vec<(&str, &str)> =
-                        vec![("location", &result.location), ("sensor", &result.sensor)];
-
-                    LogEvent::new_value_from_ref(
-                        result.measurement,
-                        result.time.timestamp(),
-                        tags.into_iter().collect(),
-                        Number::Float(result.value),
-                    )
-                }
-
                 influx::spawn_influxdb_writer(
                     InfluxConfig::new(url, database, user, password)?,
-                    mapper,
                 )
             }
             Target::Postgresql {

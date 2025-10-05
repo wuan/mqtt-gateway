@@ -222,7 +222,6 @@ pub fn create_logger(targets: Vec<Target>) -> Result<(Arc<Mutex<dyn CheckMessage
                 password,
             } => influx::spawn_influxdb_writer(
                 InfluxConfig::new(url, database, user, password)?,
-                std::convert::identity,
             ),
             Target::Postgresql { .. } => {
                 panic!("Postgresql not supported for opendtu");

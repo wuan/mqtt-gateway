@@ -367,7 +367,6 @@ pub fn create_logger(
                 password,
             } => influx::spawn_influxdb_writer(
                 InfluxConfig::new(url, database, user, password)?,
-                std::convert::identity,
             ),
             Target::Postgresql { .. } => {
                 panic!("Postgresql not supported for shelly");
