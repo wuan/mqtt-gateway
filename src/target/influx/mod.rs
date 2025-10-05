@@ -1,17 +1,16 @@
 use crate::data::LogEvent;
 use crate::Number;
 use async_trait::async_trait;
-use influxdb::{Client, Error, Query, Timestamp, WriteQuery};
+use influxdb::{Client, Error, Timestamp, WriteQuery};
 use log::{debug, info, trace, warn};
 #[cfg(test)]
 use mockall::automock;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
-use url::Url;
 
 pub struct InfluxConfig {
-    url: Url,
+    url: String,
     database: String,
     user: Option<String>,
     password: Option<String>,
@@ -25,14 +24,14 @@ impl InfluxConfig {
         user: Option<String>,
         password: Option<String>,
         token: Option<String>,
-    ) -> anyhow::Result<Self> {
-        Ok(Self {
-            url: Url::parse(&url)?,
+    ) -> Self {
+        Self {
+            url,
             database,
             user,
             password,
             token,
-        })
+        }
     }
 }
 
@@ -145,11 +144,9 @@ impl Writer {
             duration.as_secs_f64()
         );
         match result {
-            Ok(result) => {
-                info!("InfluxDB: result {}", result);
-            }
+            Ok(_) => {}
             Err(error) => {
-                &self.panic(error);
+                let _ = &self.panic(error);
             }
         }
         self.queries.clear();
@@ -170,10 +167,6 @@ impl Writer {
         influx_config: InfluxConfig,
         accumulation_time: Duration,
     ) -> Self {
-        info!(
-            "starting influx writer async {} {}",
-            &influx_config.url, &influx_config.database
-        );
         Self {
             influx_client,
             influx_config,
@@ -189,22 +182,14 @@ pub fn spawn_influxdb_writer(
 ) -> (SyncSender<LogEvent>, JoinHandle<()>) {
     let influx_client =
         create_influxdb_client(&influx_config).expect("could not create influxdb client");
-    spawn_influxdb_writer_internal(influx_client, influx_config)
-}
-
-fn spawn_influxdb_writer_internal(
-    influx_client: Box<dyn InfluxClient>,
-    influx_config: InfluxConfig,
-) -> (SyncSender<LogEvent>, JoinHandle<()>) {
     let (tx, rx) = sync_channel(100);
     println!("Spawn influx writer async");
 
     (
         tx,
         tokio::spawn(async move {
-            println!("starting influx writer async");
             info!(
-                "starting influx writer {} {}",
+                "InfluxDB: starting writer {} {}",
                 &influx_config.url, &influx_config.database
             );
 
@@ -253,7 +238,7 @@ mod tests {
         map_to_query(log_event())
     }
 
-    fn influx_config() -> anyhow::Result<InfluxConfig> {
+    fn influx_config() -> InfluxConfig {
         InfluxConfig::new(
             "http://localhost:8086".to_string(),
             "test_db".to_string(),
@@ -272,7 +257,20 @@ mod tests {
             .returning(|_| Ok("test_data".to_string()));
 
         // Run the `influxdb_writer` function
-        let (tx, join_handle) = spawn_influxdb_writer_internal(mock_client, influx_config()?);
+        let influx_config1 = influx_config();
+        let (tx1, rx) = sync_channel(100);
+        println!("Spawn influx writer async");
+        let (tx, join_handle) = (
+            tx1,
+            tokio::spawn(async move {
+                info!(
+                    "starting influx writer {} {}",
+                    &influx_config1.url, &influx_config1.database
+                );
+
+                influxdb_writer(rx, mock_client, influx_config1).await;
+            }),
+        );
 
         // Send a test query
         tx.send(log_event())?;
@@ -294,7 +292,7 @@ mod tests {
             .with(function(|points: &Vec<WriteQuery>| points.len() == 1))
             .returning(|_| Ok("test_data".to_string()));
 
-        let mut writer = Writer::new(mock_client, influx_config()?, Duration::from_secs(0));
+        let mut writer = Writer::new(mock_client, influx_config(), Duration::from_secs(0));
 
         writer.queue(write_query()).await;
         Ok(())
@@ -308,7 +306,7 @@ mod tests {
             .times(0)
             .returning(|_| Ok("test_data".to_string()));
 
-        let mut writer = Writer::new(mock_client, influx_config()?, Duration::from_secs(5));
+        let mut writer = Writer::new(mock_client, influx_config(), Duration::from_secs(5));
 
         writer.queue(write_query()).await;
         Ok(())
@@ -323,7 +321,7 @@ mod tests {
             .with(function(|points: &Vec<WriteQuery>| points.len() == 1))
             .returning(|_| Ok("test_data".to_string()));
 
-        let mut writer = Writer::new(mock_client, influx_config()?, Duration::from_secs(5));
+        let mut writer = Writer::new(mock_client, influx_config(), Duration::from_secs(5));
 
         writer.queue(write_query()).await;
         writer.flush().await;
