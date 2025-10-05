@@ -78,21 +78,15 @@ impl Sources {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::config::SourceType;
 
 
     #[tokio::test]
     async fn test_sources_creation() {
-        let sources = vec![Source {
-            name: "foo".to_string(),
-            prefix: "test".to_string(),
-            source_type: SourceType::Debug,
-            targets: None,
-        }];
-
-        let sources = Sources::new(sources);
+        let sources = sources();
+        
         assert_eq!(sources.topics.len(), 1);
         assert_eq!(sources.qoss.len(), 1);
         assert_eq!(sources.topics[0], "test/#");
@@ -101,20 +95,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_subscribe() {
-        let sources = vec![Source {
-            name: "foo".to_string(),
-            prefix: "test".to_string(),
-            source_type: SourceType::Debug,
-            targets: None,
-        }];
-
-        let sources = Sources::new(sources);
+        let sources = sources();
 
         let mut mock_client = Box::new(MockMqttClient::new());
         mock_client.expect_subscribe_many()
             .times(1)
             .returning(|_, _| Ok(ServerResponse::new()) );
-        
         
         let result = sources.subscribe(&(mock_client as Box<dyn MqttClient>)).await;
 
@@ -123,29 +109,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_message() {
-        let sources = vec![Source {
-            name: "foo".to_string(),
-            prefix: "test".to_string(),
-            source_type: SourceType::Debug,
-            targets: None,
-        }];
-
-        let sources = Sources::new(sources);
+        let sources = sources();
         let message = Message::new("test/topic", "payload", QOS_1);
+        
         sources.handle(message).await;
     }
 
     #[tokio::test]
     async fn test_shutdown() {
+        let sources = sources();
+        
+        sources.shutdown().await;
+    }
+
+    pub(crate) fn sources() -> Sources {
         let sources = vec![Source {
             name: "foo".to_string(),
-            prefix: "test".to_string(),
+            prefix: "bar".to_string(),
             source_type: SourceType::Debug,
             targets: None,
         }];
 
         let sources = Sources::new(sources);
-        sources.shutdown().await;
+        sources
     }
 }
 

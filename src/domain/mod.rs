@@ -15,7 +15,7 @@ pub(crate) mod sources;
 pub(crate) trait MqttClient {
     async fn connect(&self) -> anyhow::Result<ServerResponse>;
     async fn subscribe_many(&self, topics: &Vec<String>, qoss: &Vec<i32>) -> anyhow::Result<ServerResponse>;
-    async fn create(&mut self) -> anyhow::Result<Stream>;
+    async fn create(&mut self) -> anyhow::Result<Box<dyn Stream>>;
     fn is_connected(&self) -> bool;
     async fn reconnect(&self) -> anyhow::Result<ServerResponse>;
 }
@@ -56,12 +56,12 @@ impl MqttClient for MqttClientDefault {
             .map_err(anyhow::Error::from)
     }
 
-    async fn create(&mut self) -> anyhow::Result<Stream> {
+    async fn create(&mut self) -> anyhow::Result<Box<dyn Stream>> {
         let strm = self.mqtt_client.get_stream(None);
 
         self.connect().await?;
 
-        Ok(Stream::new(strm))
+        Ok(Box::new(StreamDefault::new(strm)))
     }
 
     fn is_connected(&self) -> bool {
@@ -76,14 +76,24 @@ impl MqttClient for MqttClientDefault {
     }
 }
 
-pub(crate) struct Stream {
+#[cfg_attr(test, automock)]
+#[async_trait]
+pub(crate) trait Stream {
+    async fn next(&mut self) -> Option<Option<Message>>;
+}
+
+pub(crate) struct StreamDefault {
     stream: async_channel::Receiver<Option<Message>>,
 }
 
-impl Stream {
+impl StreamDefault {
     fn new(stream: async_channel::Receiver<Option<Message>>) -> Self {
         Self { stream }
     }
+}
+
+#[async_trait]
+impl Stream for StreamDefault {
 
     async fn next(&mut self) -> Option<Option<Message>> {
         self.stream.next().await
