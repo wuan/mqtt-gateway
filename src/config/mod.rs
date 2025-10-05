@@ -16,7 +16,7 @@ pub enum SourceType {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Source {
-    name: String,
+    pub(crate) name: String,
     #[serde(rename = "type")]
     pub(crate) source_type: SourceType,
     pub(crate) prefix: String,

@@ -12,7 +12,7 @@ use log::warn;
 use paho_mqtt::Message;
 use serde_json::{Map, Number, Value};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use tokio::task::JoinHandle;
 
 struct Data {
     fields: HashMap<String, Number>,
@@ -50,6 +50,10 @@ impl CheckMessage for OpenMqttGatewayLogger {
                 tx.send(write_query.clone()).expect("failed to send");
             }
         }
+    }
+
+    fn checked_count(&self) -> u64 {
+        0
     }
 }
 
@@ -103,10 +107,11 @@ impl OpenMqttGatewayParser {
                     }
                 }
 
-                if fields.contains_key("rssi") && fields.len() == 1 && tags.len() == base_tag_count {
-                    tags.insert(String::from("type"),String::from("NONE"));
+                if fields.contains_key("rssi") && fields.len() == 1 && tags.len() == base_tag_count
+                {
+                    tags.insert(String::from("type"), String::from("NONE"));
                 } else if !tags.contains_key("type") {
-                    tags.insert(String::from("type"),String::from("UNKN"));
+                    tags.insert(String::from("type"), String::from("UNKN"));
                 }
                 if fields.len() > 0 {
                     data = Some(Data { fields, tags });
