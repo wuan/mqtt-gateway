@@ -137,7 +137,7 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
     if parse_result.is_err() {
         warn!(
             "Shelly parse error: {:?} on '{}' (topic: {})",
-            parse_result.err(),
+            parse_result.err().unwrap().to_string(),
             msg.payload_str(),
             msg.topic()
         );
@@ -177,11 +177,26 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::io::Write;
+use super::*;
+    use log::LevelFilter;
     use paho_mqtt::QOS_1;
     use std::collections::HashMap;
     use std::sync::mpsc::{sync_channel, Receiver};
     use std::time::Duration;
+    use std::io;
+
+    struct WriteAdapter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for WriteAdapter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().write(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.0.lock().unwrap().flush()
+        }
+    }
 
     fn next(rx: &Receiver<LogEvent>) -> Result<LogEvent> {
         let result = rx.recv_timeout(Duration::from_micros(100))?;
@@ -346,6 +361,16 @@ mod tests {
 
     #[test]
     fn test_handle_message_with_parse_error() -> Result<()> {
+        let log_buffer = Arc::new(Mutex::new(Vec::new()));
+        let buffer_clone = log_buffer.clone();
+
+        env_logger::builder()
+            .filter_level(LevelFilter::Warn)
+            .format(|buf, record| writeln!(buf, "{}: {}", record.level(), record.args()))
+            .target(env_logger::Target::Pipe(Box::new(WriteAdapter(buffer_clone))))
+            .is_test(true)
+            .try_init()?;
+
         let (tx, rx) = sync_channel(100);
         let txs = vec![tx];
 
@@ -360,6 +385,11 @@ mod tests {
         logger.check_message(&message);
 
         assert!(next(&rx).is_err());
+
+        assert_eq!(
+            String::from_utf8_lossy(log_buffer.lock().unwrap().as_slice()),
+            "WARN: Shelly parse error: \"missing field `aenergy` at line 1 column 62\" on '{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\"apower\":0.0}' (topic: shellies/bedroom-curtain/status/cover:0)\n"
+        );
 
         Ok(())
     }

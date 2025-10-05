@@ -1,3 +1,5 @@
+#![feature(ascii_char)]
+
 use crate::domain::receiver::Receiver;
 use crate::domain::sources::Sources;
 use crate::domain::MqttClientDefault;
