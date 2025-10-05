@@ -1204,6 +1204,7 @@ name = "mqtt-gateway"
 version = "0.5.1"
 dependencies = [
  "anyhow",
+ "async-channel 1.9.0",
  "async-trait",
  "chrono",
  "env_logger",
