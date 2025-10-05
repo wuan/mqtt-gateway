@@ -119,7 +119,12 @@ impl Writer {
     pub(crate) async fn queue(&mut self, query: WriteQuery) {
         self.queries.push(query);
 
-        trace!("influx writer: # of points {} time {} (elapsed: {})", self.queries.len(), self.start.elapsed().as_millis(), self.start.elapsed() >= self.accumulation_time);
+        trace!(
+            "influx writer: # of points {} time {} (elapsed: {})",
+            self.queries.len(),
+            self.start.elapsed().as_millis(),
+            self.start.elapsed() >= self.accumulation_time
+        );
         if self.queries.len() > 0 && self.start.elapsed() >= self.accumulation_time {
             self.flush().await;
         }
@@ -131,7 +136,11 @@ impl Writer {
         trace!("before write to influx");
         let result = self.influx_client.write_all(self.queries.clone()).await;
         let duration = now.elapsed();
-        debug!("write to InfluxDB #{} ({:.3} s)", query_count, duration.as_secs_f64());
+        debug!(
+            "write to InfluxDB #{} ({:.3} s)",
+            query_count,
+            duration.as_secs_f64()
+        );
         match result {
             Ok(_) => {}
             Err(error) => {
@@ -151,15 +160,24 @@ impl Writer {
 }
 
 impl Writer {
-    fn new(influx_client: Box<dyn InfluxClient>, influx_config: InfluxConfig, accumulation_time: Duration) -> Self {
+    fn new(
+        influx_client: Box<dyn InfluxClient>,
+        influx_config: InfluxConfig,
+        accumulation_time: Duration,
+    ) -> Self {
         info!(
-        "starting influx writer async {} {}",
-        &influx_config.url, &influx_config.database
-    );
-        Self { influx_client, influx_config , queries: Vec::new(), start: Instant::now(), accumulation_time }
+            "starting influx writer async {} {}",
+            &influx_config.url, &influx_config.database
+        );
+        Self {
+            influx_client,
+            influx_config,
+            queries: Vec::new(),
+            start: Instant::now(),
+            accumulation_time,
+        }
     }
 }
-
 
 pub fn spawn_influxdb_writer(
     influx_config: InfluxConfig,
@@ -213,9 +231,9 @@ pub fn map_to_query(log_event: LogEvent) -> WriteQuery {
 
 #[cfg(test)]
 mod tests {
-    use mockall::predicate::function;
     use super::*;
     use crate::Number;
+    use mockall::predicate::function;
 
     fn log_event() -> LogEvent {
         LogEvent::new_value_from_ref(
