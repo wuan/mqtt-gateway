@@ -1,13 +1,14 @@
 use crate::data::LogEvent;
 use crate::Number;
-use async_trait::async_trait;
+use async_compat::Compat;
 use influxdb::{Client, Error, Timestamp, WriteQuery};
 use log::{info, trace, warn};
 #[cfg(test)]
 use mockall::automock;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::thread;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use tokio::task::JoinHandle;
 
 #[derive(Clone)]
 pub struct InfluxConfig {
@@ -47,20 +48,13 @@ impl DefaultInfluxClient {
 }
 
 #[cfg_attr(test, automock)]
-#[async_trait]
 trait InfluxClient: Sync + Send {
-    async fn write(&self, point: WriteQuery) -> Result<String, influxdb::Error>;
-    async fn write_all(&self, points: Vec<WriteQuery>) -> Result<String, influxdb::Error>;
+    fn write(&self, point: Vec<WriteQuery>) -> Result<String, influxdb::Error>;
 }
 
-#[async_trait]
 impl InfluxClient for DefaultInfluxClient {
-    async fn write(&self, write_query: WriteQuery) -> Result<String, influxdb::Error> {
-        self.client.query(write_query).await
-    }
-
-    async fn write_all(&self, points: Vec<WriteQuery>) -> Result<String, Error> {
-        self.client.query(points).await
+fn write(&self, query: Vec<WriteQuery>) -> Result<String, influxdb::Error> {
+        futures::executor::block_on(Compat::new(async { self.client.query(query).await }))
     }
 }
 
@@ -83,7 +77,7 @@ fn create_influxdb_client(influx_config: &InfluxConfig) -> anyhow::Result<Box<dy
     Ok(Box::new(DefaultInfluxClient::new(influx_client)))
 }
 
-async fn influxdb_writer(
+fn influxdb_writer(
     rx: Receiver<LogEvent>,
     influx_client: Box<dyn InfluxClient>,
     influx_config: InfluxConfig,
@@ -100,12 +94,12 @@ async fn influxdb_writer(
                     "InfluxDB: error receiving {} {}: {:?}",
                     influx_config.url, influx_config.database, error
                 );
-                writer.flush().await;
+                writer.flush();
                 break;
             }
         };
 
-        writer.queue(query).await;
+        writer.queue(query);
     }
 
     info!(
@@ -123,7 +117,7 @@ struct Writer {
 }
 
 impl Writer {
-    pub(crate) async fn queue(&mut self, query: WriteQuery) {
+    pub(crate) fn queue(&mut self, query: WriteQuery) {
         self.queries.push(query);
 
         trace!(
@@ -133,15 +127,15 @@ impl Writer {
             self.start.elapsed() >= self.accumulation_time
         );
         if self.queries.len() > 0 && self.start.elapsed() >= self.accumulation_time {
-            self.flush().await;
+            self.flush();
         }
     }
 
-    async fn flush(&mut self) {
+    fn flush(&mut self) {
         let now = Instant::now();
         let query_count = self.queries.len();
         trace!("before write to influx");
-        let result = self.influx_client.write_all(self.queries.clone()).await;
+        let result = self.influx_client.write(self.queries.clone());
         let duration = now.elapsed();
         info!(
             "InfluxDB: {} {} write #{} ({:.3} s)",
@@ -193,13 +187,13 @@ pub fn spawn_influxdb_writer(
 
     (
         tx,
-        tokio::spawn(async move {
+        thread::spawn(move || {
             info!(
                 "InfluxDB: starting writer {} {}",
                 &influx_config.url, &influx_config.database
             );
 
-            influxdb_writer(rx, influx_client, influx_config).await;
+            influxdb_writer(rx, influx_client, influx_config);
         }),
     )
 }
@@ -254,18 +248,18 @@ mod tests {
         )
     }
 
-    #[tokio::test]
-    async fn test_influxdb_writer_internal() -> anyhow::Result<()> {
+    #[test]
+    fn test_influxdb_writer_internal() -> anyhow::Result<()> {
         let mut mock_client = Box::new(MockInfluxClient::new());
         mock_client
-            .expect_write_all()
+            .expect_write()
             .times(1)
             .returning(|_| Ok("test_data".to_string()));
 
         // Run the `influxdb_writer` function
         let (tx, rx) = sync_channel(100);
-        let join_handle = tokio::spawn(async move {
-            influxdb_writer(rx, mock_client, influx_config()).await;
+        let join_handle = thread::spawn(move || {
+            influxdb_writer(rx, mock_client, influx_config());
         });
 
         // Send a test query
@@ -274,53 +268,53 @@ mod tests {
         // Close the channel
         drop(tx);
 
-        join_handle.await.expect("stopped writer");
+        join_handle.join().expect("stopped writer");
 
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_influxdb_writer_direct_write() -> anyhow::Result<()> {
+    #[test]
+    fn test_influxdb_writer_direct_write() -> anyhow::Result<()> {
         let mut mock_client = Box::new(MockInfluxClient::new());
         mock_client
-            .expect_write_all()
+            .expect_write()
             .times(1)
             .with(function(|points: &Vec<WriteQuery>| points.len() == 1))
             .returning(|_| Ok("test_data".to_string()));
 
         let mut writer = Writer::new(mock_client, influx_config(), Duration::from_secs(0));
 
-        writer.queue(write_query()).await;
+        writer.queue(write_query());
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_influxdb_writer_batch_write() -> anyhow::Result<()> {
+    #[test]
+    fn test_influxdb_writer_batch_write() -> anyhow::Result<()> {
         let mut mock_client = Box::new(MockInfluxClient::new());
         mock_client
-            .expect_write_all()
+            .expect_write()
             .times(0)
             .returning(|_| Ok("test_data".to_string()));
 
         let mut writer = Writer::new(mock_client, influx_config(), Duration::from_secs(5));
 
-        writer.queue(write_query()).await;
+        writer.queue(write_query());
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_influxdb_writer_forced_batch_write() -> anyhow::Result<()> {
+    #[test]
+    fn test_influxdb_writer_forced_batch_write() -> anyhow::Result<()> {
         let mut mock_client = Box::new(MockInfluxClient::new());
         mock_client
-            .expect_write_all()
+            .expect_write()
             .times(1)
             .with(function(|points: &Vec<WriteQuery>| points.len() == 1))
             .returning(|_| Ok("test_data".to_string()));
 
         let mut writer = Writer::new(mock_client, influx_config(), Duration::from_secs(5));
 
-        writer.queue(write_query()).await;
-        writer.flush().await;
+        writer.queue(write_query());
+        writer.flush();
 
         Ok(())
     }

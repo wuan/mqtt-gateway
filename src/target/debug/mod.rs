@@ -1,26 +1,22 @@
 use log::{info, warn};
 use std::fmt::Debug;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use tokio::task::JoinHandle;
+use std::thread;
+use std::thread::JoinHandle;
 
 pub fn spawn_debug_logger<T: Debug + Send + 'static>() -> (SyncSender<T>, JoinHandle<()>) {
-    spawn_debug_logger_internal()
-}
-
-fn spawn_debug_logger_internal<T: Debug + Send + 'static>() -> (SyncSender<T>, JoinHandle<()>) {
     let (tx, rx) = sync_channel(100);
 
     (
         tx,
-        tokio::spawn(async move {
+        thread::spawn(move || {
             info!("starting debug writer",);
 
-            debug_writer(rx).await
+            debug_writer(rx)
         }),
     )
 }
-
-async fn debug_writer<T: Debug>(rx: Receiver<T>) {
+fn debug_writer<T: Debug>(rx: Receiver<T>) {
     info!("starting debug writer async");
 
     loop {

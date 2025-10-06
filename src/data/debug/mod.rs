@@ -4,7 +4,7 @@ use log::{info, warn};
 use paho_mqtt::Message;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::task::JoinHandle;
+use std::thread::JoinHandle;
 
 pub struct DebugLogger {
     checked_count: AtomicU64,

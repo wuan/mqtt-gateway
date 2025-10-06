@@ -1,9 +1,5 @@
 mod data;
 
-use std::fmt::Debug;
-use std::sync::mpsc::SyncSender;
-use std::sync::{Arc, LazyLock, Mutex};
-
 use crate::config::Target;
 use crate::data::{shelly, CheckMessage, LogEvent};
 use crate::target::create_targets;
@@ -14,7 +10,10 @@ use log::{debug, warn};
 use paho_mqtt::Message;
 use regex::Regex;
 use serde::Deserialize;
-use tokio::task::JoinHandle;
+use std::fmt::Debug;
+use std::sync::mpsc::SyncSender;
+use std::sync::{Arc, LazyLock, Mutex};
+use std::thread::JoinHandle;
 
 pub trait Timestamped {
     fn timestamp(&self) -> Option<i64>;
