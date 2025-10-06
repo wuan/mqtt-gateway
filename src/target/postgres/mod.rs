@@ -7,7 +7,8 @@ use postgres::types::ToSql;
 use postgres::Client;
 use postgres::{Error, NoTls};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use tokio::task::JoinHandle;
+use std::thread;
+use std::thread::JoinHandle;
 
 pub struct PostgresConfig {
     host: String,
@@ -61,8 +62,7 @@ impl PostgresClient for DefaultPostgresClient {
         self.client.execute(query, params)
     }
 }
-
-async fn start_postgres_writer(rx: Receiver<LogEvent>, mut client: Box<dyn PostgresClient>) {
+fn start_postgres_writer(rx: Receiver<LogEvent>, mut client: Box<dyn PostgresClient>) {
     loop {
         let result = rx.recv();
         let query = match result {
@@ -129,9 +129,9 @@ pub fn spawn_postgres_writer_internal(
 
     (
         tx,
-        tokio::spawn(async move {
+        thread::spawn(move || {
             info!("starting postgres writer");
-            start_postgres_writer(rx, client).await;
+            start_postgres_writer(rx, client);
         }),
     )
 }
@@ -140,8 +140,8 @@ pub fn spawn_postgres_writer_internal(
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_postgres_writer_internal() -> anyhow::Result<()> {
+    #[test]
+    fn test_postgres_writer_internal() -> anyhow::Result<()> {
         let log_event = LogEvent::new_value_from_ref(
             "test".to_string(),
             0i64,
@@ -170,7 +170,7 @@ mod tests {
 
         drop(tx);
 
-        let _ = join_handle.await;
+        let _ = join_handle.join();
 
         Ok(())
     }
