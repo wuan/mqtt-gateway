@@ -65,7 +65,7 @@ impl InfluxClient for DefaultInfluxClient {
 
 fn create_influxdb_client(influx_config: &InfluxConfig) -> anyhow::Result<Box<dyn InfluxClient>> {
     let mut influx_client = Client::new(
-        influx_config.url.to_string().clone(),
+        influx_config.url.clone(),
         influx_config.database.clone(),
     );
 
