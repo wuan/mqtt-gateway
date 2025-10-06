@@ -53,7 +53,7 @@ trait InfluxClient: Sync + Send {
 }
 
 impl InfluxClient for DefaultInfluxClient {
-fn write(&self, query: Vec<WriteQuery>) -> Result<String, influxdb::Error> {
+    fn write(&self, query: Vec<WriteQuery>) -> Result<String, influxdb::Error> {
         futures::executor::block_on(Compat::new(async { self.client.query(query).await }))
     }
 }
@@ -85,17 +85,22 @@ fn influxdb_writer(
     let mut writer = Writer::new(influx_client, influx_config.clone(), Duration::from_secs(5));
 
     loop {
-        let result = rx.recv();
+        let result = rx.recv_timeout(Duration::from_secs(10));
 
         let query = match result {
             Ok(event) => map_to_query(event),
             Err(error) => {
-                warn!(
-                    "InfluxDB: error receiving {} {}: {:?}",
-                    influx_config.url, influx_config.database, error
-                );
                 writer.flush();
-                break;
+                match error {
+                    std::sync::mpsc::RecvTimeoutError::Timeout => continue,
+                    std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                        warn!(
+                            "InfluxDB: disconnected {} {}",
+                            influx_config.url, influx_config.database,
+                        );
+                        break;
+                    }
+                }
             }
         };
 
@@ -132,6 +137,10 @@ impl Writer {
     }
 
     fn flush(&mut self) {
+        if self.queries.is_empty() {
+            return;
+        }
+
         let now = Instant::now();
         let query_count = self.queries.len();
         trace!("before write to influx");
@@ -151,7 +160,7 @@ impl Writer {
             }
         }
         self.queries.clear();
-        self.start = Instant::now();
+        self.start = now
     }
 
     fn panic(&self, error: Error) {
@@ -314,6 +323,20 @@ mod tests {
         let mut writer = Writer::new(mock_client, influx_config(), Duration::from_secs(5));
 
         writer.queue(write_query());
+        writer.flush();
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_influxdb_writer_no_batch_write_on_empty_queue() -> anyhow::Result<()> {
+        let mut mock_client = Box::new(MockInfluxClient::new());
+        mock_client
+            .expect_write()
+            .times(0);
+
+        let mut writer = Writer::new(mock_client, influx_config(), Duration::from_secs(5));
+
         writer.flush();
 
         Ok(())
