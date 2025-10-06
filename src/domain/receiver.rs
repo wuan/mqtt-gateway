@@ -36,14 +36,12 @@ impl Receiver {
     }
 
     async fn handle_error(&mut self) {
-        warn!(
-            "Lost connection. Attempting reconnect. {:?}",
-            self.mqtt_client.is_connected()
-        );
+        warn!( "MQTT: lost connection -> Attempting reconnect");
         while let Err(err) = self.mqtt_client.reconnect().await {
-            warn!("Error reconnecting: {}", err);
+            warn!("MQTT: error reconnecting: {}", err);
             Timer::after(Duration::from_secs(5)).await;
         }
+        info!("MQTT: reconnected")
     }
 }
 
