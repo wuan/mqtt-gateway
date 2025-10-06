@@ -1,40 +1,37 @@
-use async_trait::async_trait;
+use anyhow::Result;
 #[cfg(test)]
 use mockall::automock;
 use paho_mqtt as mqtt;
-use paho_mqtt::{AsyncClient, Message, ServerResponse};
-use smol::stream::StreamExt;
+use paho_mqtt::{Client, Message, ServerResponse};
 use std::time::Duration;
 
 pub(crate) mod receiver;
 pub(crate) mod sources;
 
 #[cfg_attr(test, automock)]
-#[async_trait]
 pub(crate) trait MqttClient {
-    async fn connect(&self) -> anyhow::Result<ServerResponse>;
-    async fn subscribe_many(
+    fn connect(&self) -> anyhow::Result<ServerResponse>;
+    fn subscribe_many(
         &self,
         topics: &Vec<String>,
         qoss: &Vec<i32>,
     ) -> anyhow::Result<ServerResponse>;
-    async fn create(&mut self) -> anyhow::Result<Box<dyn Stream>>;
-    async fn reconnect(&self) -> anyhow::Result<ServerResponse>;
+    fn create(&mut self) -> anyhow::Result<Box<dyn Stream>>;
+    fn reconnect(&self) -> anyhow::Result<ServerResponse>;
 }
 
 pub(crate) struct MqttClientDefault {
-    mqtt_client: AsyncClient,
+    mqtt_client: Client,
 }
 
 impl MqttClientDefault {
-    pub(crate) fn new(mqtt_client: AsyncClient) -> Self {
+    pub(crate) fn new(mqtt_client: Client) -> Self {
         Self { mqtt_client }
     }
 }
 
-#[async_trait]
 impl MqttClient for MqttClientDefault {
-    async fn connect(&self) -> anyhow::Result<ServerResponse> {
+    fn connect(&self) -> anyhow::Result<ServerResponse> {
         let conn_opts = mqtt::ConnectOptionsBuilder::new_v3()
             .keep_alive_interval(Duration::from_secs(30))
             .clean_session(false)
@@ -42,56 +39,49 @@ impl MqttClient for MqttClientDefault {
 
         self.mqtt_client
             .connect(conn_opts)
-            .await
             .map_err(anyhow::Error::from)
     }
 
-    async fn subscribe_many(
+    fn subscribe_many(
         &self,
         topics: &Vec<String>,
         qoss: &Vec<i32>,
     ) -> anyhow::Result<ServerResponse> {
         self.mqtt_client
             .subscribe_many(topics, qoss)
-            .await
             .map_err(anyhow::Error::from)
     }
 
-    async fn create(&mut self) -> anyhow::Result<Box<dyn Stream>> {
-        let strm = self.mqtt_client.get_stream(None);
+    fn create(&mut self) -> anyhow::Result<Box<dyn Stream>> {
+        let receiver = self.mqtt_client.start_consuming();
 
-        self.connect().await?;
+        self.connect()?;
 
-        Ok(Box::new(StreamDefault::new(strm)))
+        Ok(Box::new(StreamDefault::new(receiver)))
     }
 
-    async fn reconnect(&self) -> anyhow::Result<ServerResponse> {
-        self.mqtt_client
-            .reconnect()
-            .await
-            .map_err(anyhow::Error::from)
+    fn reconnect(&self) -> anyhow::Result<ServerResponse> {
+        self.mqtt_client.reconnect().map_err(anyhow::Error::from)
     }
 }
 
 #[cfg_attr(test, automock)]
-#[async_trait]
 pub(crate) trait Stream {
-    async fn next(&mut self) -> Option<Option<Message>>;
+    fn next(&mut self) -> Result<Option<Message>>;
 }
 
 pub(crate) struct StreamDefault {
-    stream: async_channel::Receiver<Option<Message>>,
+    receiver: mqtt::Receiver<Option<Message>>,
 }
 
 impl StreamDefault {
-    fn new(stream: async_channel::Receiver<Option<Message>>) -> Self {
-        Self { stream }
+    fn new(stream: mqtt::Receiver<Option<Message>>) -> Self {
+        Self { receiver: stream }
     }
 }
 
-#[async_trait]
 impl Stream for StreamDefault {
-    async fn next(&mut self) -> Option<Option<Message>> {
-        self.stream.next().await
+    fn next(&mut self) -> Result<Option<Message>> {
+        self.receiver.recv().map_err(anyhow::Error::from)
     }
 }

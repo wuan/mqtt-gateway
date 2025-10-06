@@ -9,7 +9,7 @@ use chrono::Datelike;
 use log::{debug, trace};
 use paho_mqtt::Message;
 use std::sync::{Arc, Mutex};
-use tokio::task::JoinHandle;
+use std::thread::JoinHandle;
 
 struct Data {
     timestamp: i64,

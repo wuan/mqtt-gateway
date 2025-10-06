@@ -1,7 +1,7 @@
 use crate::domain::sources::Sources;
 use crate::domain::MqttClient;
 use log::{info, warn};
-use smol::Timer;
+use std::thread;
 use std::time::Duration;
 
 pub(crate) struct Receiver {
@@ -17,31 +17,31 @@ impl Receiver {
         }
     }
 
-    pub(crate) async fn listen(mut self) -> anyhow::Result<()> {
-        let mut stream = self.mqtt_client.create().await?;
-        self.sources.subscribe(&self.mqtt_client).await?;
+    pub(crate) fn listen(mut self) -> anyhow::Result<()> {
+        let mut stream = self.mqtt_client.create()?;
+        self.sources.subscribe(&self.mqtt_client)?;
 
         info!("Waiting for messages ...");
 
-        while let Some(msg_opt) = stream.next().await {
+        while let Ok(msg_opt) = stream.next() {
             if let Some(msg) = msg_opt {
-                self.sources.handle(msg).await;
+                self.sources.handle(msg);
             } else {
-                self.handle_error().await;
+                self.handle_error();
             }
         }
 
-        self.sources.shutdown().await;
+        self.sources.shutdown();
 
         info!("Exiting receiver");
         Ok(())
     }
 
-    async fn handle_error(&mut self) {
+    fn handle_error(&mut self) {
         warn!("MQTT: lost connection -> Attempting reconnect");
-        while let Err(err) = self.mqtt_client.reconnect().await {
+        while let Err(err) = self.mqtt_client.reconnect() {
             warn!("MQTT: error reconnecting: {}", err);
-            Timer::after(Duration::from_secs(5)).await;
+            thread::sleep(Duration::from_secs(5));
         }
         info!("MQTT: reconnected")
     }
@@ -52,12 +52,13 @@ mod tests {
     use super::*;
     use crate::domain::sources::tests::sources;
     use crate::domain::MockMqttClient;
+    use anyhow::Error;
     use log::LevelFilter;
     use mockall::predicate::*;
     use paho_mqtt::ServerResponse;
 
-    #[tokio::test]
-    async fn test_receiver_reconnect() -> anyhow::Result<()> {
+    #[test]
+    fn test_receiver_reconnect() -> anyhow::Result<()> {
         let mut mqtt_client = Box::new(crate::domain::MockMqttClient::new());
         mqtt_client.expect_reconnect().times(2).returning(|| {
             static mut CALLED: bool = false;
@@ -74,31 +75,31 @@ mod tests {
         let sources = sources();
         let mut receiver = Receiver::new(mqtt_client, sources);
 
-        receiver.handle_error().await;
+        receiver.handle_error();
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_listen() {
+    #[test]
+    fn test_listen() {
         let mqtt_client = mock_mqtt_client("bar/baz");
         let sources = sources();
         let handler_ref = sources.get_handler("bar").unwrap().clone();
         let receiver = Receiver::new(mqtt_client, sources);
 
-        let result = receiver.listen().await;
+        let result = receiver.listen();
 
         assert!(result.is_ok());
         assert_eq!(handler_ref.lock().unwrap().checked_count(), 1);
     }
 
-    #[tokio::test]
-    async fn test_listen_no_matches() {
+    #[test]
+    fn test_listen_no_matches() {
         let mqtt_client = mock_mqtt_client("test/test");
         let sources = sources();
         let handler_ref = sources.get_handler("bar").unwrap().clone();
         let receiver = Receiver::new(mqtt_client, sources);
 
-        let result = receiver.listen().await;
+        let result = receiver.listen();
 
         assert!(result.is_ok());
         assert_eq!(handler_ref.lock().unwrap().checked_count(), 0);
@@ -111,13 +112,16 @@ mod tests {
             let mut stream = Box::new(crate::domain::MockStream::new());
             let topic_clone = topic_owned.clone(); // Clone again for the inner closure
             stream.expect_next().times(1).returning(move || {
-                Some(Some(paho_mqtt::Message::new(
+                Ok(Some(paho_mqtt::Message::new(
                     &topic_clone,
                     "test payload",
                     0,
                 )))
             });
-            stream.expect_next().times(1).returning(|| None);
+            stream
+                .expect_next()
+                .times(1)
+                .returning(|| anyhow::Result::Err(Error::msg("test error")));
             Ok(stream)
         });
 
@@ -133,8 +137,8 @@ mod tests {
         mqtt_client
     }
 
-    #[tokio::test]
-    async fn test_listen_with_error() {
+    #[test]
+    fn test_listen_with_error() {
         let _ = env_logger::builder()
             .filter_level(LevelFilter::Info)
             .is_test(true)
@@ -142,8 +146,11 @@ mod tests {
         let mut mqtt_client = Box::new(crate::domain::MockMqttClient::new());
         mqtt_client.expect_create().times(1).returning(|| {
             let mut stream = Box::new(crate::domain::MockStream::new());
-            stream.expect_next().times(1).returning(|| Some(None));
-            stream.expect_next().times(1).returning(|| None);
+            stream.expect_next().times(1).returning(|| Ok(None));
+            stream
+                .expect_next()
+                .times(1)
+                .returning(|| Err(Error::msg("test error")));
             Ok(stream)
         });
 
@@ -163,7 +170,7 @@ mod tests {
         let sources = sources();
         let receiver = Receiver::new(mqtt_client, sources);
 
-        let result = receiver.listen().await;
+        let result = receiver.listen();
 
         assert!(result.is_ok());
     }

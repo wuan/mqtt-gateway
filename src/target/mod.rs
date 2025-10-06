@@ -4,7 +4,7 @@ use crate::target;
 use crate::target::influx::InfluxConfig;
 use crate::target::postgres::PostgresConfig;
 use std::sync::mpsc::SyncSender;
-use tokio::task::JoinHandle;
+use std::thread::JoinHandle;
 
 pub(crate) mod influx;
 pub(crate) mod postgres;

@@ -31,8 +31,7 @@ pub enum Number {
     Float(f64),
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     if env::var("RUST_LOG").is_err() {
         env::set_var("RUST_LOG", "info")
     }
@@ -53,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
         Box::new(MqttClientDefault::new(mqtt_client)),
         Sources::new(config.sources),
     );
-    receiver.listen().await
+    receiver.listen()
 }
 
 fn determine_config_file_path() -> String {

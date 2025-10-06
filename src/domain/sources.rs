@@ -7,7 +7,7 @@ use log::{info, trace, warn};
 use paho_mqtt::{Message, ServerResponse, QOS_1};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::task::JoinHandle;
+use std::thread::JoinHandle;
 
 pub(crate) struct Sources {
     handler_map: HashMap<String, Arc<Mutex<dyn CheckMessage>>>,
@@ -47,18 +47,17 @@ impl Sources {
         }
     }
 
-    pub(crate) async fn subscribe(
+    pub(crate) fn subscribe(
         &self,
         mqtt_client: &Box<dyn MqttClient>,
     ) -> anyhow::Result<ServerResponse> {
         info!("Subscribing to topics: {:?}", &self.topics);
         mqtt_client
             .subscribe_many(&self.topics, &self.qoss)
-            .await
             .map_err(anyhow::Error::from)
     }
 
-    pub(crate) async fn handle(&self, msg: Message) {
+    pub(crate) fn handle(&self, msg: Message) {
         let prefix = msg.topic().split("/").next().unwrap();
         trace!("received from {} - {}", msg.topic(), msg.payload_str());
 
@@ -74,9 +73,9 @@ impl Sources {
         self.handler_map.get(prefix)
     }
 
-    pub(crate) async fn shutdown(self) {
+    pub(crate) fn shutdown(self) {
         for handle in self.handles {
-            handle.await.expect("failed to join influx writer thread");
+            handle.join().expect("failed to join influx writer thread");
         }
     }
 }
@@ -86,8 +85,8 @@ pub(crate) mod tests {
     use super::*;
     use crate::config::SourceType;
 
-    #[tokio::test]
-    async fn test_sources_creation() {
+    #[test]
+    fn test_sources_creation() {
         let sources = sources();
 
         assert_eq!(sources.topics.len(), 1);
@@ -96,8 +95,8 @@ pub(crate) mod tests {
         assert_eq!(sources.qoss[0], QOS_1);
     }
 
-    #[tokio::test]
-    async fn test_subscribe() {
+    #[test]
+    fn test_subscribe() {
         let sources = sources();
 
         let mut mock_client = Box::new(MockMqttClient::new());
@@ -106,26 +105,24 @@ pub(crate) mod tests {
             .times(1)
             .returning(|_, _| Ok(ServerResponse::new()));
 
-        let result = sources
-            .subscribe(&(mock_client as Box<dyn MqttClient>))
-            .await;
+        let result = sources.subscribe(&(mock_client as Box<dyn MqttClient>));
 
         assert!(result.is_ok());
     }
 
-    #[tokio::test]
-    async fn test_handle_message() {
+    #[test]
+    fn test_handle_message() {
         let sources = sources();
         let message = Message::new("test/topic", "payload", QOS_1);
 
-        sources.handle(message).await;
+        sources.handle(message);
     }
 
-    #[tokio::test]
-    async fn test_shutdown() {
+    #[test]
+    fn test_shutdown() {
         let sources = sources();
 
-        sources.shutdown().await;
+        sources.shutdown();
     }
 
     pub(crate) fn sources() -> Sources {
@@ -136,7 +133,6 @@ pub(crate) mod tests {
             targets: None,
         }];
 
-        let sources = Sources::new(sources);
-        sources
+        Sources::new(sources)
     }
 }
