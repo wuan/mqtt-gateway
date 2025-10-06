@@ -9,6 +9,7 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 
+#[derive(Clone)]
 pub struct InfluxConfig {
     url: String,
     database: String,
@@ -64,10 +65,7 @@ impl InfluxClient for DefaultInfluxClient {
 }
 
 fn create_influxdb_client(influx_config: &InfluxConfig) -> anyhow::Result<Box<dyn InfluxClient>> {
-    let mut influx_client = Client::new(
-        influx_config.url.clone(),
-        influx_config.database.clone(),
-    );
+    let mut influx_client = Client::new(influx_config.url.clone(), influx_config.database.clone());
 
     influx_client = if let Some(token) = influx_config.token.clone() {
         info!("InfluxDB: Using token");
@@ -90,7 +88,7 @@ async fn influxdb_writer(
     influx_client: Box<dyn InfluxClient>,
     influx_config: InfluxConfig,
 ) {
-    let mut writer = Writer::new(influx_client, influx_config, Duration::from_secs(5));
+    let mut writer = Writer::new(influx_client, influx_config.clone(), Duration::from_secs(5));
 
     loop {
         let result = rx.recv();
@@ -98,7 +96,10 @@ async fn influxdb_writer(
         let query = match result {
             Ok(event) => map_to_query(event),
             Err(error) => {
-                warn!("error receiving query: {:?}", error);
+                warn!(
+                    "InfluxDB: error receiving {} {}: {:?}",
+                    influx_config.url, influx_config.database, error
+                );
                 writer.flush().await;
                 break;
             }
@@ -106,7 +107,11 @@ async fn influxdb_writer(
 
         writer.queue(query).await;
     }
-    info!("exiting influx writer async");
+
+    info!(
+        "InfluxDB: exiting writer {} {}",
+        influx_config.url, influx_config.database
+    );
 }
 
 struct Writer {

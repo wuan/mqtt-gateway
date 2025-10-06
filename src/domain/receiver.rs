@@ -32,6 +32,8 @@ impl Receiver {
         }
 
         self.sources.shutdown().await;
+
+        info!("Exiting receiver");
         Ok(())
     }
 
