@@ -36,7 +36,7 @@ impl Receiver {
     }
 
     async fn handle_error(&mut self) {
-        warn!( "MQTT: lost connection -> Attempting reconnect");
+        warn!("MQTT: lost connection -> Attempting reconnect");
         while let Err(err) = self.mqtt_client.reconnect().await {
             warn!("MQTT: error reconnecting: {}", err);
             Timer::after(Duration::from_secs(5)).await;
@@ -68,10 +68,6 @@ mod tests {
                 }
             }
         });
-        mqtt_client
-            .expect_is_connected()
-            .times(1)
-            .returning(|| true);
 
         let sources = sources();
         let mut receiver = Receiver::new(mqtt_client, sources);
@@ -148,10 +144,6 @@ mod tests {
             stream.expect_next().times(1).returning(|| None);
             Ok(stream)
         });
-        mqtt_client
-            .expect_is_connected()
-            .times(1)
-            .returning(|| true);
 
         mqtt_client
             .expect_subscribe_many()

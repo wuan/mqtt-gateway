@@ -2,7 +2,7 @@ use crate::data::LogEvent;
 use crate::Number;
 use async_trait::async_trait;
 use influxdb::{Client, Error, Timestamp, WriteQuery};
-use log::{debug, info, trace, warn};
+use log::{info, trace, warn};
 #[cfg(test)]
 use mockall::automock;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};

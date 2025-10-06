@@ -19,7 +19,6 @@ pub(crate) trait MqttClient {
         qoss: &Vec<i32>,
     ) -> anyhow::Result<ServerResponse>;
     async fn create(&mut self) -> anyhow::Result<Box<dyn Stream>>;
-    fn is_connected(&self) -> bool;
     async fn reconnect(&self) -> anyhow::Result<ServerResponse>;
 }
 
@@ -64,10 +63,6 @@ impl MqttClient for MqttClientDefault {
         self.connect().await?;
 
         Ok(Box::new(StreamDefault::new(strm)))
-    }
-
-    fn is_connected(&self) -> bool {
-        self.mqtt_client.is_connected()
     }
 
     async fn reconnect(&self) -> anyhow::Result<ServerResponse> {
