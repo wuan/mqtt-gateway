@@ -143,22 +143,7 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
                 debug!("Shelly {}:{}: {:?}", location, channel, data);
 
                 if let Some(minute_ts) = data.timestamp() {
-                    for (measurement, value, unit) in fields {
-                        if let Some(result) = value(&data) {
-                            for tx in txs {
-                                tx.send(create_event(
-                                    location,
-                                    channel,
-                                    &data,
-                                    minute_ts,
-                                    measurement,
-                                    unit,
-                                    result,
-                                ))
-                                .expect("failed to send");
-                            }
-                        }
-                    }
+                    convert_measurements(txs, fields, location, channel, &data, minute_ts);
                 } else {
                     warn!("{} no timestamp {:?}", msg.topic(), msg.payload_str());
                 }
@@ -176,13 +161,39 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
     }
 }
 
+fn convert_measurements<T: Clone + Debug + Timestamped + Typenamed>(
+    txs: &Vec<SyncSender<LogEvent>>,
+    fields: &[(&str, WriteTypeMapper<T>, &str)],
+    location: &str,
+    channel: &str,
+    data: &T,
+    minute_ts: i64,
+) {
+    for (measurement, value, unit) in fields {
+        if let Some(result) = value(data) {
+            for tx in txs {
+                tx.send(create_event(
+                    location,
+                    channel,
+                    data,
+                    minute_ts,
+                    measurement,
+                    unit,
+                    result,
+                ))
+                .expect("failed to send");
+            }
+        }
+    }
+}
+
 fn create_event<T: Clone + Debug + Timestamped + Typenamed>(
     location: &str,
     channel: &str,
     data: &T,
     minute_ts: i64,
-    measurement: &&str,
-    unit: &&str,
+    measurement: &str,
+    unit: &str,
     result: Number,
 ) -> LogEvent {
     let tags = vec![
@@ -192,13 +203,12 @@ fn create_event<T: Clone + Debug + Timestamped + Typenamed>(
         ("type", data.type_name()),
         ("unit", unit),
     ];
-    let log_event = LogEvent::new_value_from_ref(
+    LogEvent::new_value_from_ref(
         measurement.to_string(),
         minute_ts,
         tags.into_iter().collect(),
         result,
-    );
-    log_event
+    )
 }
 
 #[cfg(test)]
