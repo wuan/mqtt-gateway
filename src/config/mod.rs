@@ -69,7 +69,7 @@ mod tests {
         database: "bar"
         "#;
 
-        let result: Target = serde_yml::from_str(&yaml).unwrap();
+        let result: Target = serde_yaml_ng::from_str(&yaml).unwrap();
 
         if let Target::InfluxDB { url, database, .. } = result {
             assert_eq!(url, "foo");
@@ -92,7 +92,7 @@ mod tests {
         password: "qux"
         "#;
 
-        let result: Target = serde_yml::from_str(&yaml).unwrap();
+        let result: Target = serde_yaml_ng::from_str(&yaml).unwrap();
         debug!("{:?}", result);
 
         if let Target::Postgresql {
@@ -127,7 +127,7 @@ mod tests {
             database: "qux"
         "#;
 
-        let result: Source = serde_yml::from_str(&yaml).unwrap();
+        let result: Source = serde_yaml_ng::from_str(&yaml).unwrap();
 
         assert_eq!(result.name, "foo");
         assert_eq!(result.source_type, SourceType::Sensor);
