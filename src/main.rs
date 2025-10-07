@@ -42,7 +42,7 @@ fn main() -> anyhow::Result<()> {
 
     let config_string = fs::read_to_string(config_file_path).expect("failed to read config file");
     let config: config::Config =
-        serde_yml::from_str(&config_string).expect("failed to parse config file");
+        serde_yaml_ng::from_str(&config_string).expect("failed to parse config file");
 
     debug!("config: {:?}", config);
 
