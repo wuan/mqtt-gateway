@@ -1,6 +1,7 @@
 use crate::config::Target;
 use crate::data::LogEvent;
 use crate::target;
+use crate::target::debug::spawn_debug_logger;
 use crate::target::influx::InfluxConfig;
 use crate::target::postgres::PostgresConfig;
 use std::sync::mpsc::SyncSender;
@@ -37,6 +38,7 @@ pub fn create_targets(
             } => target::postgres::spawn_postgres_writer(PostgresConfig::new(
                 host, port, user, password, database,
             )),
+            Target::Debug {} => spawn_debug_logger(),
         };
         txs.push(tx);
         handles.push(handle);

@@ -42,9 +42,8 @@ pub enum Target {
         password: String,
         database: String,
     },
-    // #[serde(rename = "debug")]
-    // Debug {
-    // },
+    #[serde(rename = "debug")]
+    Debug {},
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]

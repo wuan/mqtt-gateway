@@ -331,9 +331,7 @@ mod tests {
     #[test]
     fn test_influxdb_writer_no_batch_write_on_empty_queue() -> anyhow::Result<()> {
         let mut mock_client = Box::new(MockInfluxClient::new());
-        mock_client
-            .expect_write()
-            .times(0);
+        mock_client.expect_write().times(0);
 
         let mut writer = Writer::new(mock_client, influx_config(), Duration::from_secs(5));
 

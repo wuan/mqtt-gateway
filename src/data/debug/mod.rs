@@ -31,6 +31,8 @@ impl CheckMessage for DebugLogger {
     fn checked_count(&self) -> u64 {
         self.checked_count.load(Ordering::SeqCst)
     }
+
+    fn drop_all(&mut self) {}
 }
 
 pub fn create_logger(

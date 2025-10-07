@@ -66,4 +66,6 @@ pub trait CheckMessage {
     fn check_message(&mut self, msg: &Message);
 
     fn checked_count(&self) -> u64;
+
+    fn drop_all(&mut self);
 }

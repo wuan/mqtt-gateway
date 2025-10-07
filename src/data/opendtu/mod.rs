@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::mpsc::SyncSender;
 
 use crate::config::Target;
@@ -71,6 +72,10 @@ impl CheckMessage for OpenDTULogger {
     fn checked_count(&self) -> u64 {
         0
     }
+
+    fn drop_all(&mut self) {
+        self.txs.clear();
+    }
 }
 
 struct OpenDTUParser {
@@ -95,20 +100,7 @@ impl OpenDTUParser {
                 match element {
                     "0" => {
                         if let Some(timestamp) = self.timestamp {
-                            debug!(
-                                "OpenDTU {} inverter: {:}: {:?}",
-                                section,
-                                field,
-                                msg.payload_str()
-                            );
-                            data = Some(Data {
-                                timestamp,
-                                device: String::from(section),
-                                component: String::from("inverter"),
-                                field: String::from(field),
-                                value: msg.payload_str().parse().unwrap(),
-                                string: None,
-                            });
+                            data = Self::map_inverter(msg, section, field, timestamp);
                         }
                     }
                     "device" => {
@@ -127,18 +119,8 @@ impl OpenDTUParser {
                         let payload = msg.payload_str();
                         if payload.len() > 0 {
                             if let Some(timestamp) = self.timestamp {
-                                debug!(
-                                    "OpenDTU {} string {:}: {:}: {:?}",
-                                    section, element, field, payload
-                                );
-                                data = Some(Data {
-                                    timestamp,
-                                    device: String::from(section),
-                                    component: String::from("string"),
-                                    string: Some(String::from(element)),
-                                    field: String::from(field),
-                                    value: payload.parse().unwrap(),
-                                });
+                                data =
+                                    Self::map_string(section, element, field, payload, timestamp);
                             }
                         }
                     }
@@ -150,6 +132,44 @@ impl OpenDTUParser {
         }
 
         Ok(data)
+    }
+
+    fn map_string(
+        section: &str,
+        element: &str,
+        field: &str,
+        payload: Cow<str>,
+        timestamp: i64,
+    ) -> Option<Data> {
+        debug!(
+            "OpenDTU {} string {:}: {:}: {:?}",
+            section, element, field, payload
+        );
+        Some(Data {
+            timestamp,
+            device: String::from(section),
+            component: String::from("string"),
+            string: Some(String::from(element)),
+            field: String::from(field),
+            value: payload.parse().unwrap(),
+        })
+    }
+
+    fn map_inverter(msg: &Message, section: &str, field: &str, timestamp: i64) -> Option<Data> {
+        debug!(
+            "OpenDTU {} inverter: {:}: {:?}",
+            section,
+            field,
+            msg.payload_str()
+        );
+        Some(Data {
+            timestamp,
+            device: String::from(section),
+            component: String::from("inverter"),
+            field: String::from(field),
+            value: msg.payload_str().parse().unwrap(),
+            string: None,
+        })
     }
 }
 
@@ -203,6 +223,24 @@ mod tests {
         assert_eq!(result.component, "string");
         assert_eq!(result.string.unwrap(), "1");
         assert_eq!(result.value, 14.1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_logger() -> Result<()> {
+        let targets = vec![Target::Debug {}];
+        let (logger, mut handles) = create_logger(targets)?;
+
+        assert!(logger.lock().unwrap().checked_count() == 0);
+        assert_eq!(handles.len(), 1);
+
+        logger.lock().unwrap().drop_all();
+        if let Some(handle) = handles.pop() {
+            handle
+                .join()
+                .map_err(|e| anyhow::anyhow!("Thread panicked: {:?}", e))?;
+        }
 
         Ok(())
     }

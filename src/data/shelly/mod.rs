@@ -123,6 +123,10 @@ impl CheckMessage for ShellyLogger {
     fn checked_count(&self) -> u64 {
         0
     }
+
+    fn drop_all(&mut self) {
+        self.txs.clear();
+    }
 }
 
 fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenamed>(
@@ -132,46 +136,69 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
 ) {
     let location = msg.topic().split("/").nth(1).unwrap();
     let channel = msg.topic().split(":").last().unwrap();
-    let parse_result = shelly::parse(msg);
-    if parse_result.is_err() {
-        warn!(
-            "Shelly parse error: {:?} on '{}' (topic: {})",
-            parse_result.err().unwrap().to_string(),
-            msg.payload_str(),
-            msg.topic()
-        );
-        return;
-    }
-    let result: Option<T> = parse_result.unwrap();
-    if let Some(data) = result {
-        debug!("Shelly {}:{}: {:?}", location, channel, data);
+    let parse_result: Result<Option<T>> = shelly::parse(msg);
+    match parse_result {
+        Ok(result) => {
+            if let Some(data) = result {
+                debug!("Shelly {}:{}: {:?}", location, channel, data);
 
-        if let Some(minute_ts) = data.timestamp() {
-            for (measurement, value, unit) in fields {
-                if let Some(result) = value(&data) {
-                    let tags = vec![
-                        ("location", location),
-                        ("channel", channel),
-                        ("sensor", "shelly"),
-                        ("type", data.type_name()),
-                        ("unit", unit),
-                    ];
-                    let log_event = LogEvent::new_value_from_ref(
-                        measurement.to_string(),
-                        minute_ts,
-                        tags.into_iter().collect(),
-                        result,
-                    );
-
-                    for tx in txs {
-                        tx.send(log_event.clone()).expect("failed to send");
+                if let Some(minute_ts) = data.timestamp() {
+                    for (measurement, value, unit) in fields {
+                        if let Some(result) = value(&data) {
+                            for tx in txs {
+                                tx.send(create_event(
+                                    location,
+                                    channel,
+                                    &data,
+                                    minute_ts,
+                                    measurement,
+                                    unit,
+                                    result,
+                                ))
+                                .expect("failed to send");
+                            }
+                        }
                     }
+                } else {
+                    warn!("{} no timestamp {:?}", msg.topic(), msg.payload_str());
                 }
             }
-        } else {
-            warn!("{} no timestamp {:?}", msg.topic(), msg.payload_str());
+        }
+        Err(value) => {
+            warn!(
+                "Shelly parse error: {:?} on '{}' (topic: {})",
+                value.to_string(),
+                msg.payload_str(),
+                msg.topic()
+            );
+            return;
         }
     }
+}
+
+fn create_event<T: Clone + Debug + Timestamped + Typenamed>(
+    location: &str,
+    channel: &str,
+    data: &T,
+    minute_ts: i64,
+    measurement: &&str,
+    unit: &&str,
+    result: Number,
+) -> LogEvent {
+    let tags = vec![
+        ("location", location),
+        ("channel", channel),
+        ("sensor", "shelly"),
+        ("type", data.type_name()),
+        ("unit", unit),
+    ];
+    let log_event = LogEvent::new_value_from_ref(
+        measurement.to_string(),
+        minute_ts,
+        tags.into_iter().collect(),
+        result,
+    );
+    log_event
 }
 
 #[cfg(test)]
@@ -446,6 +473,24 @@ mod tests {
         let result: CoverData = parse(&message)?;
 
         assert!(result.position.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_logger() -> Result<()> {
+        let targets = vec![Target::Debug {}];
+        let (logger, mut handles) = create_logger(targets)?;
+
+        assert!(logger.lock().unwrap().checked_count() == 0);
+        assert_eq!(handles.len(), 1);
+
+        logger.lock().unwrap().drop_all();
+        if let Some(handle) = handles.pop() {
+            handle
+                .join()
+                .map_err(|e| anyhow::anyhow!("Thread panicked: {:?}", e))?;
+        }
 
         Ok(())
     }
