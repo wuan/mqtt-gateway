@@ -2,11 +2,12 @@ use crate::domain::receiver::Receiver;
 use crate::domain::sources::Sources;
 use crate::domain::MqttClientDefault;
 use chrono::{DateTime, Utc};
-use log::{debug, error};
+use log::debug;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use serial_test::serial;
 use std::fmt::Debug;
 use std::path::Path;
-use std::process::exit;
 use std::{env, fs};
 
 mod config;
@@ -71,9 +72,66 @@ fn determine_config_file_path() -> String {
     }
 
     if config_file_path.is_none() {
-        error!("ERROR: no configuration file found");
-        exit(10);
+        panic!("ERROR: no configuration file found");
     }
 
     config_file_path.unwrap()
+}
+
+#[cfg(test)]
+#[serial]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    #[test]
+    #[should_panic]
+    fn test_determine_config_file_path_no_file() {
+        let temp_dir = tempdir().unwrap();
+        let current_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        determine_config_file_path();
+
+        std::env::set_current_dir(current_dir).unwrap();
+        let _ = temp_dir.close();
+    }
+
+    #[test]
+    fn test_determine_config_file_path_root() -> std::io::Result<()> {
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        let config_path = temp_dir.path().join("config.yml");
+        {
+            let mut file = File::create(&config_path).unwrap();
+            file.write_all(b"test config").unwrap();
+        }
+
+        let result = determine_config_file_path();
+        assert!(result.ends_with("config.yml"));
+
+        temp_dir.close()
+    }
+
+    #[test]
+    fn test_determine_config_file_path_config_dir() -> std::io::Result<()> {
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        env::set_current_dir(temp_dir.path())?;
+
+        fs::create_dir("config")?;
+        let config_path = temp_dir.path().join("config").join("config.yml");
+        {
+            let mut file = File::create(&config_path)?;
+            file.write_all(b"test config")?;
+        }
+
+        let result = determine_config_file_path();
+        print!("result: {}", result);
+        assert!(result.ends_with("config/config.yml"));
+
+        temp_dir.close()
+    }
 }
