@@ -58,6 +58,10 @@ impl CheckMessage for OpenMqttGatewayLogger {
     fn checked_count(&self) -> u64 {
         0
     }
+
+    fn drop_all(&mut self) {
+        self.txs.clear();
+    }
 }
 
 fn parse_json(payload: &str) -> Result<Map<String, Value>> {
@@ -97,22 +101,7 @@ impl OpenMqttGatewayParser {
                 let base_tag_count = tags.len();
 
                 for (key, value) in result {
-                    match value {
-                        Value::Number(number) => {
-                            let number_value = if number.is_f64() {
-                                Number::Float(number.as_f64().unwrap())
-                            } else {
-                                Number::Int(number.as_i64().unwrap())
-                            };
-                            fields.insert(key, number_value);
-                        }
-                        Value::String(value) => {
-                            tags.insert(key, value);
-                        }
-                        _ => {
-                            warn!("unhandled entry {}: {:?}", key, value);
-                        }
-                    }
+                    Self::convert_value(&mut fields, &mut tags, key, value);
                 }
 
                 if fields.contains_key("rssi") && fields.len() == 1 && tags.len() == base_tag_count
@@ -129,6 +118,38 @@ impl OpenMqttGatewayParser {
             }
         }
         Ok(data)
+    }
+
+    fn convert_value(
+        mut fields: &mut HashMap<String, Number>,
+        tags: &mut HashMap<String, String>,
+        key: String,
+        value: Value,
+    ) {
+        match value {
+            Value::Number(number) => {
+                Self::convert_number(&mut fields, key, number);
+            }
+            Value::String(value) => {
+                tags.insert(key, value);
+            }
+            _ => {
+                warn!("unhandled entry {}: {:?}", key, value);
+            }
+        }
+    }
+
+    fn convert_number(
+        fields: &mut HashMap<String, Number>,
+        key: String,
+        number: serde_json::Number,
+    ) {
+        let number_value = if number.is_f64() {
+            Number::Float(number.as_f64().unwrap())
+        } else {
+            Number::Int(number.as_i64().unwrap())
+        };
+        fields.insert(key, number_value);
     }
 }
 

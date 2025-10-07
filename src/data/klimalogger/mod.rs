@@ -43,6 +43,14 @@ impl SensorLogger {
 
 const MAX_TIME_OFFSET_SECONDS: i64 = 60;
 
+pub fn create_logger(
+    targets: Vec<Target>,
+) -> Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
+    let (txs, handles) = create_targets(targets)?;
+
+    Ok((Arc::new(Mutex::new(SensorLogger::new(txs))), handles))
+}
+
 impl CheckMessage for SensorLogger {
     fn check_message(&mut self, msg: &Message) {
         let mut split = msg.topic().split("/");
@@ -93,6 +101,10 @@ impl CheckMessage for SensorLogger {
 
     fn checked_count(&self) -> u64 {
         0
+    }
+
+    fn drop_all(&mut self) {
+        self.txs.clear();
     }
 }
 
@@ -181,12 +193,22 @@ mod tests {
 
         Ok(())
     }
-}
 
-pub fn create_logger(
-    targets: Vec<Target>,
-) -> Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
-    let (txs, handles) = create_targets(targets)?;
+    #[test]
+    fn test_create_logger() -> Result<()> {
+        let targets = vec![Target::Debug {}];
+        let (logger, mut handles) = create_logger(targets)?;
 
-    Ok((Arc::new(Mutex::new(SensorLogger::new(txs))), handles))
+        assert!(logger.lock().unwrap().checked_count() == 0);
+        assert_eq!(handles.len(), 1);
+
+        logger.lock().unwrap().drop_all();
+        if let Some(handle) = handles.pop() {
+            handle
+                .join()
+                .map_err(|e| anyhow::anyhow!("Thread panicked: {:?}", e))?;
+        }
+
+        Ok(())
+    }
 }
