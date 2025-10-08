@@ -65,7 +65,9 @@ impl LogEvent {
 pub trait CheckMessage {
     fn check_message(&mut self, msg: &Message);
 
+    #[cfg(test)]
     fn checked_count(&self) -> u64;
 
+    #[cfg(test)]
     fn drop_all(&mut self);
 }

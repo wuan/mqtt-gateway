@@ -28,10 +28,12 @@ impl CheckMessage for DebugLogger {
         info!("'{}' with {}", topic, payload);
     }
 
+    #[cfg(test)]
     fn checked_count(&self) -> u64 {
         self.checked_count.load(Ordering::SeqCst)
     }
 
+    #[cfg(test)]
     fn drop_all(&mut self) {}
 }
 
