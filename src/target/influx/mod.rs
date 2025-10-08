@@ -50,11 +50,19 @@ impl DefaultInfluxClient {
 #[cfg_attr(test, automock)]
 trait InfluxClient: Sync + Send {
     fn write(&self, point: Vec<WriteQuery>) -> Result<String, influxdb::Error>;
+
+    #[cfg(test)]
+    fn wrapped(&self) -> &Client;
 }
 
 impl InfluxClient for DefaultInfluxClient {
     fn write(&self, query: Vec<WriteQuery>) -> Result<String, influxdb::Error> {
         futures::executor::block_on(Compat::new(async { self.client.query(query).await }))
+    }
+
+    #[cfg(test)]
+    fn wrapped(&self) -> &Client {
+        &self.client
     }
 }
 
@@ -192,6 +200,14 @@ pub fn spawn_influxdb_writer(
 ) -> (SyncSender<LogEvent>, JoinHandle<()>) {
     let influx_client =
         create_influxdb_client(&influx_config).expect("could not create influxdb client");
+
+    spawn_writer(influx_client, influx_config)
+}
+
+fn spawn_writer(
+    influx_client: Box<dyn InfluxClient>,
+    influx_config: InfluxConfig,
+) -> (SyncSender<LogEvent>, JoinHandle<()>) {
     let (tx, rx) = sync_channel(100);
 
     (
@@ -338,5 +354,51 @@ mod tests {
         writer.flush();
 
         Ok(())
+    }
+
+    #[test]
+    fn test_spawn_influxdb_writer_closing_without_sending_something() -> anyhow::Result<()> {
+        let mock_client = Box::new(MockInfluxClient::new());
+
+        let (tx, handle) = spawn_writer(mock_client, influx_config());
+
+        drop(tx);
+
+        handle
+            .join()
+            .map_err(|e| anyhow::anyhow!("Thread panicked: {:?}", e))
+    }
+
+    #[test]
+    fn test_spawn_influxdb_writer_closing_after_sending() -> anyhow::Result<()> {
+        let mut mock_client = Box::new(MockInfluxClient::new());
+        mock_client
+            .expect_write()
+            .times(1)
+            .with(function(|points: &Vec<WriteQuery>| points.len() == 1))
+            .returning(|_| Ok("".to_string()));
+
+        let (tx, handle) = spawn_writer(mock_client, influx_config());
+
+        tx.send(log_event())?;
+
+        drop(tx);
+
+        handle
+            .join()
+            .map_err(|e| anyhow::anyhow!("Thread panicked: {:?}", e))
+    }
+
+    #[test]
+    fn test_create_influxdb_client() {
+        let config = influx_config();
+
+        let result = create_influxdb_client(&config);
+
+        assert!(result.is_ok());
+        let wrapper = result.unwrap();
+        let client = wrapper.wrapped();
+        assert_eq!(client.database_name(), "test_db");
+        assert_eq!(client.database_url(), "http://localhost:8086");
     }
 }

@@ -120,10 +120,12 @@ impl CheckMessage for ShellyLogger {
         }
     }
 
+    #[cfg(test)]
     fn checked_count(&self) -> u64 {
         0
     }
 
+    #[cfg(test)]
     fn drop_all(&mut self) {
         self.txs.clear();
     }

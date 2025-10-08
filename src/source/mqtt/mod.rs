@@ -15,3 +15,24 @@ pub fn create_mqtt_client(mqtt_url: String, mqtt_client_id: String) -> mqtt::Cli
         process::exit(1);
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_mqtt_client_success() {
+        let client = create_mqtt_client("bad_url".to_string(), "test_client".to_string());
+
+        assert_eq!(client.client_id(), "test_client");
+    }
+
+    #[test]
+    fn test_create_mqtt_client_connect_failure() {
+        let client = create_mqtt_client("bad_url".to_string(), "test_client".to_string());
+
+        let result = client.connect(None);
+
+        assert!(result.is_err());
+    }
+}
