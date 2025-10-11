@@ -1,6 +1,6 @@
 [package]
 name = "mqtt-gateway"
-version = "0.6.7"
+version = "0.6.8"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -25,4 +25,3 @@ futures = { version = "0.3.31", features = ["futures-executor"] }
 mockall = "^0.13"
 serial_test = "3.2.0"
 tempfile = "3.23.0"
-testcontainers = { version = "0.25.0", features = ["blocking"] }
