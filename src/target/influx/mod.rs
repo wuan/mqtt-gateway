@@ -70,15 +70,15 @@ fn create_influxdb_client(influx_config: &InfluxConfig) -> anyhow::Result<Box<dy
     let mut influx_client = Client::new(influx_config.url.clone(), influx_config.database.clone());
 
     influx_client = if let Some(token) = influx_config.token.clone() {
-        info!("InfluxDB: Using token");
+        info!("InfluxDB: {} {} set token", &influx_config.url, &influx_config.database);
         influx_client.with_token(token)
     } else if let (Some(user), Some(password)) =
         (influx_config.user.clone(), influx_config.password.clone())
     {
-        info!("InfluxDB: Using username {} and password", &user);
+        info!("InfluxDB: {} {} set username {} and password", &influx_config.url, &influx_config.database, &user);
         influx_client.with_auth(user, password)
     } else {
-        info!("InfluxDB: No authentication");
+        info!("InfluxDB: {} {} no authentication", &influx_config.url, &influx_config.database);
         influx_client
     };
 
@@ -90,7 +90,7 @@ fn influxdb_writer(
     influx_client: Box<dyn InfluxClient>,
     influx_config: InfluxConfig,
 ) {
-    let mut writer = Writer::new(influx_client, influx_config.clone(), Duration::from_secs(5));
+    let mut writer = Writer::new(influx_client, influx_config.clone(), Duration::from_secs(15));
 
     loop {
         let result = rx.recv_timeout(Duration::from_secs(10));
