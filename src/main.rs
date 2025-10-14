@@ -1,6 +1,6 @@
-use crate::domain::receiver::Receiver;
-use crate::domain::sources::Sources;
-use crate::domain::MqttClientDefault;
+use crate::core::receiver::Receiver;
+use crate::core::sources::Sources;
+use source::mqtt::MqttClientDefault;
 use chrono::{DateTime, Utc};
 use log::debug;
 use serde::{Deserialize, Serialize};
@@ -12,7 +12,7 @@ use std::{env, fs};
 
 mod config;
 mod data;
-mod domain;
+mod core;
 mod source;
 mod target;
 

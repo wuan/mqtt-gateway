@@ -1,16 +1,16 @@
-use crate::domain::sources::Sources;
-use crate::domain::MqttClient;
+use crate::core::sources::Sources;
+use crate::core::SourceClient;
 use log::{info, warn};
 use std::thread;
 use std::time::Duration;
 
 pub(crate) struct Receiver {
-    mqtt_client: Box<dyn MqttClient>,
+    mqtt_client: Box<dyn SourceClient>,
     sources: Sources,
 }
 
 impl Receiver {
-    pub(crate) fn new(mqtt_client: Box<dyn MqttClient>, sources: Sources) -> Self {
+    pub(crate) fn new(mqtt_client: Box<dyn SourceClient>, sources: Sources) -> Self {
         Self {
             mqtt_client,
             sources,
@@ -50,8 +50,8 @@ impl Receiver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::sources::tests::sources;
-    use crate::domain::MockMqttClient;
+    use crate::core::sources::tests::sources;
+    use crate::core::MockSourceClient;
     use anyhow::Error;
     use log::LevelFilter;
     use mockall::predicate::*;
@@ -59,7 +59,7 @@ mod tests {
 
     #[test]
     fn test_receiver_reconnect() -> anyhow::Result<()> {
-        let mut mqtt_client = Box::new(crate::domain::MockMqttClient::new());
+        let mut mqtt_client = Box::new(crate::core::MockSourceClient::new());
         mqtt_client.expect_reconnect().times(2).returning(|| {
             static mut CALLED: bool = false;
             unsafe {
@@ -105,11 +105,11 @@ mod tests {
         assert_eq!(handler_ref.lock().unwrap().checked_count(), 0);
     }
 
-    fn mock_mqtt_client(topic: &str) -> Box<MockMqttClient> {
-        let mut mqtt_client = Box::new(crate::domain::MockMqttClient::new());
+    fn mock_mqtt_client(topic: &str) -> Box<MockSourceClient> {
+        let mut mqtt_client = Box::new(crate::core::MockSourceClient::new());
         let topic_owned = topic.to_string(); // Clone the topic string to ensure ownership
         mqtt_client.expect_create().times(1).returning(move || {
-            let mut stream = Box::new(crate::domain::MockStream::new());
+            let mut stream = Box::new(crate::core::MockStream::new());
             let topic_clone = topic_owned.clone(); // Clone again for the inner closure
             stream.expect_next().times(1).returning(move || {
                 Ok(Some(paho_mqtt::Message::new(
@@ -143,9 +143,9 @@ mod tests {
             .filter_level(LevelFilter::Info)
             .is_test(true)
             .try_init();
-        let mut mqtt_client = Box::new(crate::domain::MockMqttClient::new());
+        let mut mqtt_client = Box::new(crate::core::MockSourceClient::new());
         mqtt_client.expect_create().times(1).returning(|| {
-            let mut stream = Box::new(crate::domain::MockStream::new());
+            let mut stream = Box::new(crate::core::MockStream::new());
             stream.expect_next().times(1).returning(|| Ok(None));
             stream
                 .expect_next()

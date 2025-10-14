@@ -1,8 +1,8 @@
 use crate::config::{Source, SourceType};
 use crate::data::{debug, klimalogger, opendtu, openmqttgateway, shelly, CheckMessage};
 #[cfg(test)]
-use crate::domain::MockMqttClient;
-use crate::domain::MqttClient;
+use crate::core::MockSourceClient;
+use crate::core::SourceClient;
 use log::{info, trace, warn};
 use paho_mqtt::{Message, ServerResponse, QOS_1};
 use std::collections::HashMap;
@@ -49,7 +49,7 @@ impl Sources {
 
     pub(crate) fn subscribe(
         &self,
-        mqtt_client: &Box<dyn MqttClient>,
+        mqtt_client: &Box<dyn SourceClient>,
     ) -> anyhow::Result<ServerResponse> {
         info!("Subscribing to topics: {:?}", &self.topics);
         mqtt_client
@@ -99,13 +99,13 @@ pub(crate) mod tests {
     fn test_subscribe() {
         let sources = sources();
 
-        let mut mock_client = Box::new(MockMqttClient::new());
+        let mut mock_client = Box::new(MockSourceClient::new());
         mock_client
             .expect_subscribe_many()
             .times(1)
             .returning(|_, _| Ok(ServerResponse::new()));
 
-        let result = sources.subscribe(&(mock_client as Box<dyn MqttClient>));
+        let result = sources.subscribe(&(mock_client as Box<dyn SourceClient>));
 
         assert!(result.is_ok());
     }
