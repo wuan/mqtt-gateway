@@ -19,7 +19,7 @@ anyhow = "^1.0"
 regex = "^1.12"
 log = "^0.4"
 async-compat = "0.2.5"
-futures = { version = "0.3.31", features = ["futures-executor"] }
+futures = { version = "0.3.32", features = ["futures-executor"] }
 
 [dev-dependencies]
 mockall = "^0.14"
