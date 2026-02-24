@@ -24,4 +24,4 @@ futures = { version = "0.3.32", features = ["futures-executor"] }
 [dev-dependencies]
 mockall = "^0.14"
 serial_test = "3.4.0"
-tempfile = "3.25.0"
+tempfile = "3.26.0"
