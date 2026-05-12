@@ -1,7 +1,8 @@
+use anyhow::Context;
 use crate::data::LogEvent;
 use crate::Number;
 use async_compat::Compat;
-use influxdb::{Client, Error, Timestamp, WriteQuery};
+use influxdb::{Client, Timestamp, WriteQuery};
 use log::{info, trace, warn};
 #[cfg(test)]
 use mockall::automock;
@@ -164,18 +165,14 @@ impl Writer {
         match result {
             Ok(_) => {}
             Err(error) => {
-                let _ = &self.panic(error);
+                log::error!(
+                    "#### Error writing to influx: {} {}: {:?}",
+                    self.influx_config.url, self.influx_config.database, error
+                );
             }
         }
         self.queries.clear();
         self.start = now
-    }
-
-    fn panic(&self, error: Error) {
-        panic!(
-            "#### Error writing to influx: {} {}: {:?}",
-            self.influx_config.url, self.influx_config.database, error
-        );
     }
 }
 
@@ -197,11 +194,11 @@ impl Writer {
 
 pub fn spawn_influxdb_writer(
     influx_config: InfluxConfig,
-) -> (SyncSender<LogEvent>, JoinHandle<()>) {
-    let influx_client =
-        create_influxdb_client(&influx_config).expect("could not create influxdb client");
+) -> anyhow::Result<(SyncSender<LogEvent>, JoinHandle<()>)> {
+    let influx_client = create_influxdb_client(&influx_config)
+        .context("Failed to create InfluxDB client")?;
 
-    spawn_writer(influx_client, influx_config)
+    Ok(spawn_writer(influx_client, influx_config))
 }
 
 fn spawn_writer(
