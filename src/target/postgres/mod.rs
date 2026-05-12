@@ -1,3 +1,4 @@
+use anyhow;
 use crate::data::LogEvent;
 use crate::Number;
 use log::{error, info, warn};
@@ -105,12 +106,14 @@ fn start_postgres_writer(rx: Receiver<LogEvent>, mut client: Box<dyn PostgresCli
     info!("exiting influx writer async");
 }
 
-pub fn spawn_postgres_writer(config: PostgresConfig) -> (SyncSender<LogEvent>, JoinHandle<()>) {
-    let client = create_postgres_client(&config);
-    spawn_postgres_writer_internal(client)
+pub fn spawn_postgres_writer(
+    config: PostgresConfig,
+) -> anyhow::Result<(SyncSender<LogEvent>, JoinHandle<()>)> {
+    let client = create_postgres_client(&config)?;
+    Ok(spawn_postgres_writer_internal(client))
 }
 
-fn create_postgres_client(config: &PostgresConfig) -> Box<dyn PostgresClient> {
+fn create_postgres_client(config: &PostgresConfig) -> anyhow::Result<Box<dyn PostgresClient>> {
     let client = postgres::Config::new()
         .host(&config.host)
         .port(config.port)
@@ -118,8 +121,15 @@ fn create_postgres_client(config: &PostgresConfig) -> Box<dyn PostgresClient> {
         .password(&config.password)
         .dbname(&config.database)
         .connect(NoTls)
-        .expect("failed to connect to Postgres database");
-    Box::new(DefaultPostgresClient::new(client))
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to connect to Postgres database at {}:{}: {}",
+                config.host,
+                config.port,
+                e
+            )
+        })?;
+    Ok(Box::new(DefaultPostgresClient::new(client)))
 }
 
 pub fn spawn_postgres_writer_internal(
