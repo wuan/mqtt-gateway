@@ -2,7 +2,7 @@ use anyhow::Result;
 #[cfg(test)]
 use mockall::automock;
 use paho_mqtt as mqtt;
-use paho_mqtt::{Client, Message, ServerResponse};
+use paho_mqtt::{Client, Message, ServerResponse, SyncReceiver};
 use std::time::Duration;
 
 pub(crate) mod receiver;
@@ -71,11 +71,11 @@ pub(crate) trait Stream {
 }
 
 pub(crate) struct StreamDefault {
-    receiver: mqtt::Receiver<Option<Message>>,
+    receiver: SyncReceiver<Option<Message>>,
 }
 
 impl StreamDefault {
-    fn new(stream: mqtt::Receiver<Option<Message>>) -> Self {
+    fn new(stream: SyncReceiver<Option<Message>>) -> Self {
         Self { receiver: stream }
     }
 }
