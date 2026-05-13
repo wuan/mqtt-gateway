@@ -1,4 +1,6 @@
+use anyhow;
 use crate::data::LogEvent;
+use crate::is_shutdown_requested;
 use crate::Number;
 use log::{error, info, warn};
 #[cfg(test)]
@@ -64,12 +66,24 @@ impl PostgresClient for DefaultPostgresClient {
 }
 fn start_postgres_writer(rx: Receiver<LogEvent>, mut client: Box<dyn PostgresClient>) {
     loop {
-        let result = rx.recv();
+        // Check for shutdown request
+        if is_shutdown_requested() {
+            info!("PostgreSQL: shutdown requested, exiting writer");
+            break;
+        }
+
+        // Use recv_timeout to allow periodic shutdown checks
+        let result = rx.recv_timeout(std::time::Duration::from_secs(1));
         let query = match result {
             Ok(query) => query,
             Err(error) => {
-                warn!("error receiving query: {:?}", error);
-                break;
+                match error {
+                    std::sync::mpsc::RecvTimeoutError::Timeout => continue,
+                    std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                        warn!("PostgreSQL: channel disconnected");
+                        break;
+                    }
+                }
             }
         };
 
@@ -102,15 +116,17 @@ fn start_postgres_writer(rx: Receiver<LogEvent>, mut client: Box<dyn PostgresCli
             }
         }
     }
-    info!("exiting influx writer async");
+    info!("exiting postgres writer");
 }
 
-pub fn spawn_postgres_writer(config: PostgresConfig) -> (SyncSender<LogEvent>, JoinHandle<()>) {
-    let client = create_postgres_client(&config);
-    spawn_postgres_writer_internal(client)
+pub fn spawn_postgres_writer(
+    config: PostgresConfig,
+) -> anyhow::Result<(SyncSender<LogEvent>, JoinHandle<()>)> {
+    let client = create_postgres_client(&config)?;
+    Ok(spawn_postgres_writer_internal(client))
 }
 
-fn create_postgres_client(config: &PostgresConfig) -> Box<dyn PostgresClient> {
+fn create_postgres_client(config: &PostgresConfig) -> anyhow::Result<Box<dyn PostgresClient>> {
     let client = postgres::Config::new()
         .host(&config.host)
         .port(config.port)
@@ -118,8 +134,15 @@ fn create_postgres_client(config: &PostgresConfig) -> Box<dyn PostgresClient> {
         .password(&config.password)
         .dbname(&config.database)
         .connect(NoTls)
-        .expect("failed to connect to Postgres database");
-    Box::new(DefaultPostgresClient::new(client))
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to connect to Postgres database at {}:{}: {}",
+                config.host,
+                config.port,
+                e
+            )
+        })?;
+    Ok(Box::new(DefaultPostgresClient::new(client)))
 }
 
 pub fn spawn_postgres_writer_internal(
