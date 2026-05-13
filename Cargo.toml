@@ -20,6 +20,7 @@ regex = "^1.12"
 log = "^0.4"
 async-compat = "0.2.5"
 futures = { version = "0.3.32", features = ["futures-executor"] }
+signal-hook = "0.3"
 
 [dev-dependencies]
 mockall = "^0.14"

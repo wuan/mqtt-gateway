@@ -1,5 +1,6 @@
 use anyhow;
 use crate::data::LogEvent;
+use crate::is_shutdown_requested;
 use crate::Number;
 use log::{error, info, warn};
 #[cfg(test)]
@@ -65,12 +66,24 @@ impl PostgresClient for DefaultPostgresClient {
 }
 fn start_postgres_writer(rx: Receiver<LogEvent>, mut client: Box<dyn PostgresClient>) {
     loop {
-        let result = rx.recv();
+        // Check for shutdown request
+        if is_shutdown_requested() {
+            info!("PostgreSQL: shutdown requested, exiting writer");
+            break;
+        }
+
+        // Use recv_timeout to allow periodic shutdown checks
+        let result = rx.recv_timeout(std::time::Duration::from_secs(1));
         let query = match result {
             Ok(query) => query,
             Err(error) => {
-                warn!("error receiving query: {:?}", error);
-                break;
+                match error {
+                    std::sync::mpsc::RecvTimeoutError::Timeout => continue,
+                    std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                        warn!("PostgreSQL: channel disconnected");
+                        break;
+                    }
+                }
             }
         };
 
@@ -103,7 +116,7 @@ fn start_postgres_writer(rx: Receiver<LogEvent>, mut client: Box<dyn PostgresCli
             }
         }
     }
-    info!("exiting influx writer async");
+    info!("exiting postgres writer");
 }
 
 pub fn spawn_postgres_writer(
