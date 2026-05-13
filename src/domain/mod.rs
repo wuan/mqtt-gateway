@@ -2,7 +2,7 @@ use anyhow::Result;
 #[cfg(test)]
 use mockall::automock;
 use paho_mqtt as mqtt;
-use paho_mqtt::{Client, Message, ServerResponse};
+use paho_mqtt::{Client, Message, ServerResponse, SslOptionsBuilder, SyncReceiver};
 use std::time::Duration;
 
 pub(crate) mod receiver;
@@ -32,9 +32,14 @@ impl MqttClientDefault {
 
 impl MqttClient for MqttClientDefault {
     fn connect(&self) -> anyhow::Result<ServerResponse> {
+        let ssl_opts = SslOptionsBuilder::new()
+            .enable_server_cert_auth(false)
+            .finalize();
+
         let conn_opts = mqtt::ConnectOptionsBuilder::new_v3()
             .keep_alive_interval(Duration::from_secs(30))
             .clean_session(false)
+            .ssl_options(ssl_opts)
             .finalize();
 
         self.mqtt_client
@@ -71,11 +76,11 @@ pub(crate) trait Stream {
 }
 
 pub(crate) struct StreamDefault {
-    receiver: mqtt::Receiver<Option<Message>>,
+    receiver: SyncReceiver<Option<Message>>,
 }
 
 impl StreamDefault {
-    fn new(stream: mqtt::Receiver<Option<Message>>) -> Self {
+    fn new(stream: SyncReceiver<Option<Message>>) -> Self {
         Self { receiver: stream }
     }
 }
