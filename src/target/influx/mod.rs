@@ -1,7 +1,9 @@
+use anyhow::Context;
 use crate::data::LogEvent;
+use crate::is_shutdown_requested;
 use crate::Number;
 use async_compat::Compat;
-use influxdb::{Client, Error, Timestamp, WriteQuery};
+use influxdb::{Client, Timestamp, WriteQuery};
 use log::{info, trace, warn};
 #[cfg(test)]
 use mockall::automock;
@@ -93,7 +95,18 @@ fn influxdb_writer(
     let mut writer = Writer::new(influx_client, influx_config.clone(), Duration::from_secs(15));
 
     loop {
-        let result = rx.recv_timeout(Duration::from_secs(10));
+        // Use shorter timeout to check shutdown flag more frequently
+        let result = rx.recv_timeout(Duration::from_secs(1));
+
+        // Check for shutdown request periodically
+        if is_shutdown_requested() {
+            writer.flush();
+            info!(
+                "InfluxDB: shutdown requested, exiting writer {} {}",
+                influx_config.url, influx_config.database
+            );
+            break;
+        }
 
         let query = match result {
             Ok(event) => map_to_query(event),
@@ -164,18 +177,14 @@ impl Writer {
         match result {
             Ok(_) => {}
             Err(error) => {
-                let _ = &self.panic(error);
+                log::error!(
+                    "#### Error writing to influx: {} {}: {:?}",
+                    self.influx_config.url, self.influx_config.database, error
+                );
             }
         }
         self.queries.clear();
         self.start = now
-    }
-
-    fn panic(&self, error: Error) {
-        panic!(
-            "#### Error writing to influx: {} {}: {:?}",
-            self.influx_config.url, self.influx_config.database, error
-        );
     }
 }
 
@@ -197,11 +206,11 @@ impl Writer {
 
 pub fn spawn_influxdb_writer(
     influx_config: InfluxConfig,
-) -> (SyncSender<LogEvent>, JoinHandle<()>) {
-    let influx_client =
-        create_influxdb_client(&influx_config).expect("could not create influxdb client");
+) -> anyhow::Result<(SyncSender<LogEvent>, JoinHandle<()>)> {
+    let influx_client = create_influxdb_client(&influx_config)
+        .context("Failed to create InfluxDB client")?;
 
-    spawn_writer(influx_client, influx_config)
+    Ok(spawn_writer(influx_client, influx_config))
 }
 
 fn spawn_writer(

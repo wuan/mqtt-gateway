@@ -1,13 +1,16 @@
 use crate::domain::receiver::Receiver;
 use crate::domain::sources::Sources;
 use crate::domain::MqttClientDefault;
+use anyhow::Context;
 use chrono::{DateTime, Utc};
-use log::debug;
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use serial_test::serial;
-use std::fmt::Debug;
+use signal_hook::consts::{SIGINT, SIGTERM};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::{env, fs};
 
 mod config;
@@ -15,6 +18,19 @@ mod data;
 mod domain;
 mod source;
 mod target;
+
+/// Global flag for graceful shutdown
+static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+/// Check if shutdown has been requested
+pub fn is_shutdown_requested() -> bool {
+    SHUTDOWN.load(Ordering::Relaxed)
+}
+
+/// Request shutdown
+pub fn request_shutdown() {
+    SHUTDOWN.store(true, Ordering::Relaxed);
+}
 
 #[derive(Debug, Clone)]
 pub struct SensorReading {
@@ -39,43 +55,71 @@ fn main() -> anyhow::Result<()> {
     // Initialize the logger from the environment
     env_logger::init();
 
-    let config_file_path = determine_config_file_path();
+    // Set up signal handlers for graceful shutdown
+    setup_signal_handlers()?;
 
-    let config_string = fs::read_to_string(config_file_path).expect("failed to read config file");
-    let config: config::Config =
-        serde_yaml_ng::from_str(&config_string).expect("failed to parse config file");
+    let config_file_path = determine_config_file_path()
+        .context("Failed to find configuration file in ./ or ./config/")?;
+
+    let config_string = fs::read_to_string(&config_file_path)
+        .with_context(|| format!("Failed to read config file: {}", config_file_path))?;
+    let config: config::Config = serde_yaml_ng::from_str(&config_string)
+        .with_context(|| format!("Failed to parse config file: {}", config_file_path))?;
 
     debug!("config: {:?}", config);
 
-    let mqtt_client = source::mqtt::create_mqtt_client(config.mqtt_url, config.mqtt_client_id);
+    let mqtt_client = source::mqtt::create_mqtt_client(&config.mqtt_url, &config.mqtt_client_id)?;
 
     let receiver = Receiver::new(
         Box::new(MqttClientDefault::new(mqtt_client)),
         Sources::new(config.sources),
     );
-    receiver.listen()
+    receiver.listen()?;
+
+    info!("Shutdown complete");
+    Ok(())
 }
 
-fn determine_config_file_path() -> String {
+/// Set up signal handlers for graceful shutdown on SIGINT (Ctrl+C) and SIGTERM
+fn setup_signal_handlers() -> anyhow::Result<()> {
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
+    let flag_clone = shutdown_flag.clone();
+
+    // Register signal handlers
+    signal_hook::flag::register(SIGINT, flag_clone.clone())?;
+    signal_hook::flag::register(SIGTERM, flag_clone)?;
+
+    // Spawn a thread to watch for shutdown signals and set our global flag
+    std::thread::spawn(move || {
+        while !shutdown_flag.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        request_shutdown();
+    });
+
+    Ok(())
+}
+
+fn determine_config_file_path() -> anyhow::Result<String> {
     let config_file_name = "config.yml";
     let config_locations = ["./", "./config"];
-
-    let mut config_file_path: Option<String> = None;
 
     for config_location in config_locations {
         let path = Path::new(config_location);
         let tmp_config_file_path = path.join(Path::new(config_file_name));
         if tmp_config_file_path.exists() && tmp_config_file_path.is_file() {
-            config_file_path = Some(String::from(tmp_config_file_path.to_str().unwrap()));
-            break;
+            return Ok(String::from(
+                tmp_config_file_path.to_str().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Invalid config file path: {}",
+                        tmp_config_file_path.display()
+                    )
+                })?,
+            ));
         }
     }
 
-    if config_file_path.is_none() {
-        panic!("ERROR: no configuration file found");
-    }
-
-    config_file_path.unwrap()
+    Err(anyhow::anyhow!("No configuration file found in ./ or ./config/"))
 }
 
 #[cfg(test)]
@@ -87,22 +131,27 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    #[should_panic]
     fn test_determine_config_file_path_no_file() {
+        // Change to a directory that doesn't have config.yml
         let temp_dir = tempdir().unwrap();
         let current_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        
+        // Set current dir to temp dir - this should not have config.yml
+        std::env::set_current_dir(temp_dir.path()).expect("failed to set current dir");
 
-        determine_config_file_path();
+        let result = determine_config_file_path();
+        assert!(result.is_err());
 
-        std::env::set_current_dir(current_dir).unwrap();
-        let _ = temp_dir.close();
+        // Restore current dir before dropping temp_dir
+        std::env::set_current_dir(&current_dir).expect("failed to restore current dir");
+        drop(temp_dir);
     }
 
     #[test]
     fn test_determine_config_file_path_root() -> std::io::Result<()> {
         let temp_dir = tempdir().expect("failed to create temp dir");
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        let current_dir = std::env::current_dir()?;
+        std::env::set_current_dir(temp_dir.path())?;
 
         let config_path = temp_dir.path().join("config.yml");
         {
@@ -110,15 +159,17 @@ mod tests {
             file.write_all(b"test config").unwrap();
         }
 
-        let result = determine_config_file_path();
+        let result = determine_config_file_path().expect("failed to determine config path");
         assert!(result.ends_with("config.yml"));
 
+        std::env::set_current_dir(&current_dir)?;
         temp_dir.close()
     }
 
     #[test]
     fn test_determine_config_file_path_config_dir() -> std::io::Result<()> {
         let temp_dir = tempdir().expect("failed to create temp dir");
+        let current_dir = std::env::current_dir()?;
         env::set_current_dir(temp_dir.path())?;
 
         fs::create_dir("config")?;
@@ -128,10 +179,11 @@ mod tests {
             file.write_all(b"test config")?;
         }
 
-        let result = determine_config_file_path();
+        let result = determine_config_file_path().expect("failed to determine config path");
         print!("result: {}", result);
         assert!(result.ends_with("config/config.yml"));
 
+        std::env::set_current_dir(&current_dir)?;
         temp_dir.close()
     }
 }
