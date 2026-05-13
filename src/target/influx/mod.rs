@@ -1,5 +1,6 @@
 use anyhow::Context;
 use crate::data::LogEvent;
+use crate::is_shutdown_requested;
 use crate::Number;
 use async_compat::Compat;
 use influxdb::{Client, Timestamp, WriteQuery};
@@ -94,7 +95,18 @@ fn influxdb_writer(
     let mut writer = Writer::new(influx_client, influx_config.clone(), Duration::from_secs(15));
 
     loop {
-        let result = rx.recv_timeout(Duration::from_secs(10));
+        // Use shorter timeout to check shutdown flag more frequently
+        let result = rx.recv_timeout(Duration::from_secs(1));
+
+        // Check for shutdown request periodically
+        if is_shutdown_requested() {
+            writer.flush();
+            info!(
+                "InfluxDB: shutdown requested, exiting writer {} {}",
+                influx_config.url, influx_config.database
+            );
+            break;
+        }
 
         let query = match result {
             Ok(event) => map_to_query(event),

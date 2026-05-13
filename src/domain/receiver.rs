@@ -1,5 +1,6 @@
 use crate::domain::sources::Sources;
 use crate::domain::MqttClient;
+use crate::is_shutdown_requested;
 use log::{info, warn};
 use std::thread;
 use std::time::Duration;
@@ -23,14 +24,26 @@ impl Receiver {
 
         info!("Waiting for messages ...");
 
-        while let Ok(msg_opt) = stream.next() {
+        while !is_shutdown_requested() {
+            // Check for shutdown before processing next message
+            let msg_opt = match stream.next() {
+                Ok(msg_opt) => msg_opt,
+                Err(err) => {
+                    warn!("Error reading from MQTT stream: {}", err);
+                    // On error from stream, break out of loop
+                    break;
+                }
+            };
+
             if let Some(msg) = msg_opt {
                 self.sources.handle(msg);
             } else {
+                // Connection lost (msg_opt is None) - try to reconnect
                 self.handle_error();
             }
         }
 
+        info!("Shutdown requested, cleaning up...");
         self.sources.shutdown();
 
         info!("Exiting receiver");
@@ -39,11 +52,22 @@ impl Receiver {
 
     fn handle_error(&mut self) {
         warn!("MQTT: lost connection -> Attempting reconnect");
-        while let Err(err) = self.mqtt_client.reconnect() {
-            warn!("MQTT: error reconnecting: {}", err);
-            thread::sleep(Duration::from_secs(5));
+        while !is_shutdown_requested() {
+            match self.mqtt_client.reconnect() {
+                Ok(_) => {
+                    info!("MQTT: reconnected");
+                    return;
+                }
+                Err(err) => {
+                    if is_shutdown_requested() {
+                        warn!("MQTT: shutdown requested during reconnect, aborting");
+                        return;
+                    }
+                    warn!("MQTT: error reconnecting: {}", err);
+                    thread::sleep(Duration::from_secs(5));
+                }
+            }
         }
-        info!("MQTT: reconnected")
     }
 }
 

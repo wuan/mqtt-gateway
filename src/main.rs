@@ -3,11 +3,14 @@ use crate::domain::sources::Sources;
 use crate::domain::MqttClientDefault;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
-use log::debug;
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use serial_test::serial;
+use signal_hook::consts::{SIGINT, SIGTERM};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::{env, fs};
 
 mod config;
@@ -15,6 +18,19 @@ mod data;
 mod domain;
 mod source;
 mod target;
+
+/// Global flag for graceful shutdown
+static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+/// Check if shutdown has been requested
+pub fn is_shutdown_requested() -> bool {
+    SHUTDOWN.load(Ordering::Relaxed)
+}
+
+/// Request shutdown
+pub fn request_shutdown() {
+    SHUTDOWN.store(true, Ordering::Relaxed);
+}
 
 #[derive(Debug, Clone)]
 pub struct SensorReading {
@@ -39,6 +55,9 @@ fn main() -> anyhow::Result<()> {
     // Initialize the logger from the environment
     env_logger::init();
 
+    // Set up signal handlers for graceful shutdown
+    setup_signal_handlers()?;
+
     let config_file_path = determine_config_file_path()
         .context("Failed to find configuration file in ./ or ./config/")?;
 
@@ -55,7 +74,30 @@ fn main() -> anyhow::Result<()> {
         Box::new(MqttClientDefault::new(mqtt_client)),
         Sources::new(config.sources),
     );
-    receiver.listen()
+    receiver.listen()?;
+
+    info!("Shutdown complete");
+    Ok(())
+}
+
+/// Set up signal handlers for graceful shutdown on SIGINT (Ctrl+C) and SIGTERM
+fn setup_signal_handlers() -> anyhow::Result<()> {
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
+    let flag_clone = shutdown_flag.clone();
+
+    // Register signal handlers
+    signal_hook::flag::register(SIGINT, flag_clone.clone())?;
+    signal_hook::flag::register(SIGTERM, flag_clone)?;
+
+    // Spawn a thread to watch for shutdown signals and set our global flag
+    std::thread::spawn(move || {
+        while !shutdown_flag.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        request_shutdown();
+    });
+
+    Ok(())
 }
 
 fn determine_config_file_path() -> anyhow::Result<String> {
