@@ -33,29 +33,41 @@ sources:
         host: "<postgres host>"
         port: 5432
         user: "<psql username>"
-        password: "<psql password"
+        password: "${POSTGRES_PASSWORD}"
         database: "sensors"
+        tls: false
   - name: "Shelly data"
     type: "shelly"
     prefix: "shellies"
     targets:
       - type: "influxdb"
-        host: "<influx host>"
-        port: 8086
+        url: "http://<influx host>:8086"
         database: "shelly"
+        token: "${INFLUX_TOKEN}"
       - type: "postgresql"
         host: "<postgres host>"
         port: 5433
         user: "<psql username>"
-        password: "<psql password>"
+        password: "${POSTGRES_PASSWORD}"
         database: "shelly"
   - name: "PV data"
     type: "opendtu"
     prefix: "solar"
     targets:
       - type: "influxdb"
-        host: "<influx host>"
-        port: 8086
+        url: "http://<influx host>:8086"
         database: "solar"
 
 ```
+
+### Configuration notes
+
+- **InfluxDB targets** take a `url` (for example `http://<host>:8086`) and either
+  `user`/`password` or a `token`.
+- **PostgreSQL targets** are only supported for `sensor` and `shelly` sources,
+  because only those provide the required `location`/`sensor`/`value` schema.
+  Set `tls: true` to require a verified TLS connection.
+- **Environment variables**: any `${VAR_NAME}` placeholder in the configuration
+  file is replaced with the value of that environment variable. Referencing an
+  undefined variable is a configuration error. This lets secrets stay out of the
+  file (for example via Docker/Compose secrets).

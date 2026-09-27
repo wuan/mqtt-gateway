@@ -1,6 +1,6 @@
 use crate::data::LogEvent;
-use crate::is_shutdown_requested;
 use crate::Number;
+use crate::Shutdown;
 use anyhow::Context;
 use async_compat::Compat;
 use influxdb::{Client, Timestamp, WriteQuery};
@@ -100,6 +100,7 @@ fn influxdb_writer(
     rx: Receiver<LogEvent>,
     influx_client: Box<dyn InfluxClient>,
     influx_config: InfluxConfig,
+    shutdown: Shutdown,
 ) {
     let mut writer = Writer::new(
         influx_client,
@@ -112,7 +113,11 @@ fn influxdb_writer(
         match rx.recv_timeout(Duration::from_secs(1)) {
             // Process the event before reacting to a shutdown request so it is
             // not silently dropped.
-            Ok(event) => writer.queue(map_to_query(event)),
+            Ok(event) => {
+                if let Some(query) = map_to_query(event) {
+                    writer.queue(query);
+                }
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 writer.flush();
@@ -125,7 +130,7 @@ fn influxdb_writer(
         }
 
         // Check for shutdown request periodically
-        if is_shutdown_requested() {
+        if shutdown.is_requested() {
             writer.flush();
             info!(
                 "InfluxDB: shutdown requested, exiting writer {} {}",
@@ -141,12 +146,19 @@ fn influxdb_writer(
     );
 }
 
+/// Maximum write attempts (initial try + retries) before a batch is dropped.
+const WRITE_MAX_ATTEMPTS: u32 = 3;
+/// Base delay for exponential backoff between write attempts.
+const WRITE_RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
+
 struct Writer {
     influx_client: Box<dyn InfluxClient>,
     influx_config: InfluxConfig,
     queries: Vec<WriteQuery>,
     accumulation_time: Duration,
     start: Instant,
+    max_attempts: u32,
+    retry_base_delay: Duration,
 }
 
 impl Writer {
@@ -172,8 +184,39 @@ impl Writer {
         let now = Instant::now();
         let queries = std::mem::take(&mut self.queries);
         let query_count = queries.len();
-        trace!("before write to influx");
-        let result = self.influx_client.write(queries);
+
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            trace!("before write to influx (attempt {})", attempt);
+            match self.influx_client.write(queries.clone()) {
+                Ok(_) => break,
+                Err(error) => {
+                    if attempt >= self.max_attempts {
+                        log::error!(
+                            "#### Error writing to influx after {} attempt(s): {} {}: {:?}",
+                            attempt,
+                            self.influx_config.url,
+                            self.influx_config.database,
+                            error
+                        );
+                        break;
+                    }
+                    let delay = self.retry_base_delay * 2u32.pow(attempt - 1);
+                    warn!(
+                        "InfluxDB: write failed (attempt {}/{}): {} {}: {:?}; retrying in {:?}",
+                        attempt,
+                        self.max_attempts,
+                        self.influx_config.url,
+                        self.influx_config.database,
+                        error,
+                        delay
+                    );
+                    thread::sleep(delay);
+                }
+            }
+        }
+
         let duration = now.elapsed();
         info!(
             "InfluxDB: {} {} write #{} ({:.3} s)",
@@ -182,17 +225,6 @@ impl Writer {
             query_count,
             duration.as_secs_f64()
         );
-        match result {
-            Ok(_) => {}
-            Err(error) => {
-                log::error!(
-                    "#### Error writing to influx: {} {}: {:?}",
-                    self.influx_config.url,
-                    self.influx_config.database,
-                    error
-                );
-            }
-        }
         self.start = now
     }
 }
@@ -209,22 +241,26 @@ impl Writer {
             queries: Vec::new(),
             start: Instant::now(),
             accumulation_time,
+            max_attempts: WRITE_MAX_ATTEMPTS,
+            retry_base_delay: WRITE_RETRY_BASE_DELAY,
         }
     }
 }
 
 pub fn spawn_influxdb_writer(
     influx_config: InfluxConfig,
+    shutdown: Shutdown,
 ) -> anyhow::Result<(SyncSender<LogEvent>, JoinHandle<()>)> {
     let influx_client =
         create_influxdb_client(&influx_config).context("Failed to create InfluxDB client")?;
 
-    Ok(spawn_writer(influx_client, influx_config))
+    Ok(spawn_writer(influx_client, influx_config, shutdown))
 }
 
 fn spawn_writer(
     influx_client: Box<dyn InfluxClient>,
     influx_config: InfluxConfig,
+    shutdown: Shutdown,
 ) -> (SyncSender<LogEvent>, JoinHandle<()>) {
     let (tx, rx) = sync_channel(100);
 
@@ -236,16 +272,26 @@ fn spawn_writer(
                 influx_config.url, influx_config.database
             );
 
-            influxdb_writer(rx, influx_client, influx_config);
+            influxdb_writer(rx, influx_client, influx_config, shutdown);
         }),
     )
 }
 
-pub fn map_to_query(log_event: LogEvent) -> WriteQuery {
-    let mut write_query = WriteQuery::new(
-        Timestamp::Seconds(log_event.timestamp as u128),
-        log_event.measurement,
-    );
+pub fn map_to_query(log_event: LogEvent) -> Option<WriteQuery> {
+    // InfluxDB timestamps are unsigned; a negative or zero timestamp would wrap
+    // to a nonsensical value, so drop the event instead.
+    let timestamp = match u128::try_from(log_event.timestamp) {
+        Ok(timestamp) if timestamp > 0 => timestamp,
+        _ => {
+            warn!(
+                "InfluxDB: skipping '{}' with invalid timestamp {}",
+                log_event.measurement, log_event.timestamp
+            );
+            return None;
+        }
+    };
+
+    let mut write_query = WriteQuery::new(Timestamp::Seconds(timestamp), log_event.measurement);
     for (tag, value) in log_event.tags {
         write_query = write_query.add_tag(tag, value);
     }
@@ -259,7 +305,7 @@ pub fn map_to_query(log_event: LogEvent) -> WriteQuery {
             }
         }
     }
-    write_query
+    Some(write_query)
 }
 
 #[cfg(test)]
@@ -269,16 +315,20 @@ mod tests {
     use mockall::predicate::function;
 
     fn log_event() -> LogEvent {
+        log_event_at(1_701_292_592)
+    }
+
+    fn log_event_at(timestamp: i64) -> LogEvent {
         LogEvent::new_value_from_ref(
             "test".to_string(),
-            0i64,
+            timestamp,
             vec![].into_iter().collect(),
             Number::Float(1.23),
         )
     }
 
     fn write_query() -> WriteQuery {
-        map_to_query(log_event())
+        map_to_query(log_event()).expect("valid event")
     }
 
     fn influx_config() -> InfluxConfig {
@@ -292,6 +342,62 @@ mod tests {
     }
 
     #[test]
+    fn test_map_to_query_rejects_invalid_timestamps() {
+        assert!(map_to_query(log_event_at(0)).is_none());
+        assert!(map_to_query(log_event_at(-1)).is_none());
+        assert!(map_to_query(log_event_at(i64::MIN)).is_none());
+        assert!(map_to_query(log_event_at(1)).is_some());
+    }
+
+    #[test]
+    fn test_influxdb_writer_retries_until_success() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+
+        let mut mock_client = Box::new(MockInfluxClient::new());
+        let attempts = Arc::new(AtomicU32::new(0));
+        let attempts_clone = attempts.clone();
+        mock_client.expect_write().times(3).returning(move |_| {
+            if attempts_clone.fetch_add(1, Ordering::SeqCst) < 2 {
+                Err(influxdb::Error::ApiError(500))
+            } else {
+                Ok("ok".to_string())
+            }
+        });
+
+        let mut writer = Writer::new(mock_client, influx_config(), Duration::from_secs(0));
+        writer.retry_base_delay = Duration::ZERO;
+
+        writer.queue(write_query());
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn test_influxdb_writer_gives_up_after_max_attempts() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+
+        let mut mock_client = Box::new(MockInfluxClient::new());
+        let attempts = Arc::new(AtomicU32::new(0));
+        let attempts_clone = attempts.clone();
+        mock_client
+            .expect_write()
+            .times(WRITE_MAX_ATTEMPTS as usize)
+            .returning(move |_| {
+                attempts_clone.fetch_add(1, Ordering::SeqCst);
+                Err(influxdb::Error::ApiError(500))
+            });
+
+        let mut writer = Writer::new(mock_client, influx_config(), Duration::from_secs(0));
+        writer.retry_base_delay = Duration::ZERO;
+
+        writer.queue(write_query());
+
+        assert_eq!(attempts.load(Ordering::SeqCst), WRITE_MAX_ATTEMPTS);
+    }
+
+    #[test]
     fn test_influxdb_writer_internal() -> anyhow::Result<()> {
         let mut mock_client = Box::new(MockInfluxClient::new());
         mock_client
@@ -302,7 +408,7 @@ mod tests {
         // Run the `influxdb_writer` function
         let (tx, rx) = sync_channel(100);
         let join_handle = thread::spawn(move || {
-            influxdb_writer(rx, mock_client, influx_config());
+            influxdb_writer(rx, mock_client, influx_config(), Shutdown::new());
         });
 
         // Send a test query
@@ -378,7 +484,7 @@ mod tests {
     fn test_spawn_influxdb_writer_closing_without_sending_something() -> anyhow::Result<()> {
         let mock_client = Box::new(MockInfluxClient::new());
 
-        let (tx, handle) = spawn_writer(mock_client, influx_config());
+        let (tx, handle) = spawn_writer(mock_client, influx_config(), Shutdown::new());
 
         drop(tx);
 
@@ -396,7 +502,7 @@ mod tests {
             .with(function(|points: &Vec<WriteQuery>| points.len() == 1))
             .returning(|_| Ok("".to_string()));
 
-        let (tx, handle) = spawn_writer(mock_client, influx_config());
+        let (tx, handle) = spawn_writer(mock_client, influx_config(), Shutdown::new());
 
         tx.send(log_event())?;
 

@@ -4,6 +4,7 @@ use crate::config::Target;
 use crate::data::{send_event, shelly, CheckMessage, LogEvent, LoggerResult};
 use crate::target::create_targets;
 use crate::Number;
+use crate::Shutdown;
 use anyhow::Result;
 use data::{CoverData, SwitchData};
 use log::{debug, warn};
@@ -209,8 +210,8 @@ fn create_event<T: Clone + Debug + Timestamped + Typenamed>(
     )
 }
 
-pub fn create_logger(targets: Vec<Target>) -> Result<LoggerResult> {
-    let (txs, handles) = create_targets(targets)?;
+pub fn create_logger(targets: Vec<Target>, shutdown: Shutdown) -> Result<LoggerResult> {
+    let (txs, handles) = create_targets(targets, shutdown)?;
 
     Ok((Arc::new(Mutex::new(ShellyLogger::new(txs))), handles))
 }
@@ -515,7 +516,7 @@ mod tests {
     #[test]
     fn test_create_logger() -> Result<()> {
         let targets = vec![Target::Debug {}];
-        let (logger, mut handles) = create_logger(targets)?;
+        let (logger, mut handles) = create_logger(targets, crate::Shutdown::new())?;
 
         assert!(logger.lock().unwrap().checked_count() == 0);
         assert_eq!(handles.len(), 1);

@@ -1,11 +1,13 @@
-use crate::is_shutdown_requested;
+use crate::Shutdown;
 use log::{info, warn};
 use std::fmt::Debug;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread;
 use std::thread::JoinHandle;
 
-pub fn spawn_debug_logger<T: Debug + Send + 'static>() -> (SyncSender<T>, JoinHandle<()>) {
+pub fn spawn_debug_logger<T: Debug + Send + 'static>(
+    shutdown: Shutdown,
+) -> (SyncSender<T>, JoinHandle<()>) {
     let (tx, rx) = sync_channel(100);
 
     (
@@ -13,16 +15,16 @@ pub fn spawn_debug_logger<T: Debug + Send + 'static>() -> (SyncSender<T>, JoinHa
         thread::spawn(move || {
             info!("starting debug writer");
 
-            debug_writer(rx)
+            debug_writer(rx, shutdown)
         }),
     )
 }
-fn debug_writer<T: Debug>(rx: Receiver<T>) {
+fn debug_writer<T: Debug>(rx: Receiver<T>, shutdown: Shutdown) {
     info!("starting debug writer async");
 
     loop {
         // Check for shutdown request
-        if is_shutdown_requested() {
+        if shutdown.is_requested() {
             info!("Debug: shutdown requested, exiting writer");
             break;
         }
@@ -49,7 +51,7 @@ mod tests {
 
     #[test]
     fn test_spawn_debug_logger_creates_channel() {
-        let (tx, handle) = spawn_debug_logger::<String>();
+        let (tx, handle) = spawn_debug_logger::<String>(Shutdown::new());
 
         // Send a test message
         let send_result = tx.send("test message".to_string());
@@ -67,13 +69,11 @@ mod tests {
 
     #[test]
     fn test_spawn_debug_logger_shutdown() {
-        // Set shutdown flag before spawning
-        // Note: This is tricky because is_shutdown_requested() uses a global AtomicBool
-        // We can't easily reset it, so we test that the function returns valid types
-        let (tx, handle) = spawn_debug_logger::<i32>();
+        let shutdown = Shutdown::new();
+        let (tx, handle) = spawn_debug_logger::<i32>(shutdown.clone());
 
-        // The thread should be running
         assert!(tx.send(42).is_ok());
+        shutdown.request();
 
         // Clean up
         drop(tx);

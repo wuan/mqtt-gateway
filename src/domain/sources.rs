@@ -3,6 +3,7 @@ use crate::data::{debug, klimalogger, opendtu, openmqttgateway, shelly, CheckMes
 #[cfg(test)]
 use crate::domain::MockMqttClient;
 use crate::domain::MqttClient;
+use crate::Shutdown;
 use anyhow::Context;
 use log::{error, info, trace, warn};
 use paho_mqtt::{Message, ServerResponse, QOS_1};
@@ -18,7 +19,7 @@ pub(crate) struct Sources {
 }
 
 impl Sources {
-    pub(crate) fn new(sources: Vec<Source>) -> anyhow::Result<Self> {
+    pub(crate) fn new(sources: Vec<Source>, shutdown: Shutdown) -> anyhow::Result<Self> {
         let mut handler_map: HashMap<String, Arc<Mutex<dyn CheckMessage>>> = HashMap::new();
         let mut handles: Vec<JoinHandle<()>> = Vec::new();
         let mut topics: Vec<String> = Vec::new();
@@ -27,11 +28,13 @@ impl Sources {
         for source in sources {
             let targets = source.targets.unwrap_or_default();
             let (logger, mut source_handles) = match source.source_type {
-                SourceType::Shelly => shelly::create_logger(targets),
-                SourceType::Sensor => klimalogger::create_logger(targets),
-                SourceType::OpenDTU => opendtu::create_logger(targets),
-                SourceType::OpenMqttGateway => openmqttgateway::create_logger(targets),
-                SourceType::Debug => debug::create_logger(targets),
+                SourceType::Shelly => shelly::create_logger(targets, shutdown.clone()),
+                SourceType::Sensor => klimalogger::create_logger(targets, shutdown.clone()),
+                SourceType::OpenDTU => opendtu::create_logger(targets, shutdown.clone()),
+                SourceType::OpenMqttGateway => {
+                    openmqttgateway::create_logger(targets, shutdown.clone())
+                }
+                SourceType::Debug => debug::create_logger(targets, shutdown.clone()),
             }
             .with_context(|| format!("Failed to create logger for source '{}'", source.name))?;
 
@@ -147,6 +150,6 @@ pub(crate) mod tests {
             targets: None,
         }];
 
-        Sources::new(sources).expect("failed to create sources")
+        Sources::new(sources, crate::Shutdown::new()).expect("failed to create sources")
     }
 }

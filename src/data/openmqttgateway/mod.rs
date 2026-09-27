@@ -5,6 +5,7 @@ use crate::config::Target;
 use crate::data::{send_event, CheckMessage, LogEvent, LoggerResult};
 use crate::target::create_targets;
 use crate::Number;
+use crate::Shutdown;
 use anyhow::{anyhow, Result};
 use log::warn;
 use paho_mqtt::Message;
@@ -167,8 +168,8 @@ impl OpenMqttGatewayParser {
     }
 }
 
-pub fn create_logger(targets: Vec<Target>) -> Result<LoggerResult> {
-    let (txs, handles) = create_targets(targets)?;
+pub fn create_logger(targets: Vec<Target>, shutdown: Shutdown) -> Result<LoggerResult> {
+    let (txs, handles) = create_targets(targets, shutdown)?;
 
     Ok((
         Arc::new(Mutex::new(OpenMqttGatewayLogger::new(txs))),

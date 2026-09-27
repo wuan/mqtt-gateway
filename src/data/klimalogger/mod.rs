@@ -5,6 +5,7 @@ use crate::config::Target;
 use crate::data::{send_event, CheckMessage, LogEvent, LoggerResult};
 use crate::target::create_targets;
 use crate::Number;
+use crate::Shutdown;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use log::{debug, warn};
@@ -42,8 +43,8 @@ impl SensorLogger {
 
 const MAX_TIME_OFFSET_SECONDS: i64 = 60;
 
-pub fn create_logger(targets: Vec<Target>) -> Result<LoggerResult> {
-    let (txs, handles) = create_targets(targets)?;
+pub fn create_logger(targets: Vec<Target>, shutdown: Shutdown) -> Result<LoggerResult> {
+    let (txs, handles) = create_targets(targets, shutdown)?;
 
     Ok((Arc::new(Mutex::new(SensorLogger::new(txs))), handles))
 }
@@ -236,7 +237,7 @@ mod tests {
     #[test]
     fn test_create_logger() -> Result<()> {
         let targets = vec![Target::Debug {}];
-        let (logger, mut handles) = create_logger(targets)?;
+        let (logger, mut handles) = create_logger(targets, crate::Shutdown::new())?;
 
         assert!(logger.lock().unwrap().checked_count() == 0);
         assert_eq!(handles.len(), 1);

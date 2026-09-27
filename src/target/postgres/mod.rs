@@ -1,6 +1,6 @@
 use crate::data::LogEvent;
-use crate::is_shutdown_requested;
 use crate::Number;
+use crate::Shutdown;
 use log::{error, info, warn};
 #[cfg(test)]
 use mockall::automock;
@@ -22,6 +22,7 @@ pub struct PostgresConfig {
     username: String,
     password: String,
     database: String,
+    tls: bool,
 }
 
 impl PostgresConfig {
@@ -31,6 +32,7 @@ impl PostgresConfig {
         username: String,
         password: String,
         database: String,
+        tls: bool,
     ) -> Self {
         Self {
             host,
@@ -38,6 +40,7 @@ impl PostgresConfig {
             username,
             password,
             database,
+            tls,
         }
     }
 }
@@ -72,10 +75,11 @@ fn start_postgres_writer(
     rx: Receiver<LogEvent>,
     mut client: Box<dyn PostgresClient>,
     reconnect: ReconnectClient,
+    shutdown: Shutdown,
 ) {
     loop {
         // Check for shutdown request
-        if is_shutdown_requested() {
+        if shutdown.is_requested() {
             info!("PostgreSQL: shutdown requested, draining queue");
             while let Ok(event) = rx.try_recv() {
                 write_event(&event, &mut client, &reconnect);
@@ -191,35 +195,48 @@ fn write_event(
 
 pub fn spawn_postgres_writer(
     config: PostgresConfig,
+    shutdown: Shutdown,
 ) -> anyhow::Result<(SyncSender<LogEvent>, JoinHandle<()>)> {
     let client = create_postgres_client(&config)?;
     let reconnect_config = config.clone();
     let reconnect: ReconnectClient = Box::new(move || create_postgres_client(&reconnect_config));
-    Ok(spawn_postgres_writer_internal(client, reconnect))
+    Ok(spawn_postgres_writer_internal(client, reconnect, shutdown))
 }
 
 fn create_postgres_client(config: &PostgresConfig) -> anyhow::Result<Box<dyn PostgresClient>> {
-    let client = postgres::Config::new()
+    let mut pg_config = postgres::Config::new();
+    pg_config
         .host(&config.host)
         .port(config.port)
         .user(&config.username)
         .password(&config.password)
-        .dbname(&config.database)
-        .connect(NoTls)
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to connect to Postgres database at {}:{}: {}",
-                config.host,
-                config.port,
-                e
-            )
-        })?;
+        .dbname(&config.database);
+
+    let result = if config.tls {
+        let connector = native_tls::TlsConnector::builder()
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build TLS connector: {}", e))?;
+        pg_config.connect(postgres_native_tls::MakeTlsConnector::new(connector))
+    } else {
+        pg_config.connect(NoTls)
+    };
+
+    let client = result.map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to connect to Postgres database at {}:{} (tls: {}): {}",
+            config.host,
+            config.port,
+            config.tls,
+            e
+        )
+    })?;
     Ok(Box::new(DefaultPostgresClient::new(client)))
 }
 
 pub(crate) fn spawn_postgres_writer_internal(
     client: Box<dyn PostgresClient>,
     reconnect: ReconnectClient,
+    shutdown: Shutdown,
 ) -> (SyncSender<LogEvent>, JoinHandle<()>) {
     let (tx, rx) = sync_channel(100);
 
@@ -227,7 +244,7 @@ pub(crate) fn spawn_postgres_writer_internal(
         tx,
         thread::spawn(move || {
             info!("starting postgres writer");
-            start_postgres_writer(rx, client, reconnect);
+            start_postgres_writer(rx, client, reconnect, shutdown);
         }),
     )
 }
@@ -314,7 +331,8 @@ mod tests {
 
         let reconnect: ReconnectClient =
             Box::new(|| Err(anyhow::anyhow!("reconnect not expected in test")));
-        let (tx, join_handle) = spawn_postgres_writer_internal(mock_client, reconnect);
+        let (tx, join_handle) =
+            spawn_postgres_writer_internal(mock_client, reconnect, Shutdown::new());
 
         tx.send(log_event).unwrap();
 

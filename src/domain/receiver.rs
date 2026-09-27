@@ -1,20 +1,31 @@
 use crate::domain::sources::Sources;
 use crate::domain::MqttClient;
-use crate::is_shutdown_requested;
+use crate::Shutdown;
 use log::{info, warn};
 use std::thread;
 use std::time::Duration;
 
+/// Delay between MQTT reconnect attempts.
+const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
+
 pub(crate) struct Receiver {
     mqtt_client: Box<dyn MqttClient>,
     sources: Sources,
+    shutdown: Shutdown,
+    reconnect_delay: Duration,
 }
 
 impl Receiver {
-    pub(crate) fn new(mqtt_client: Box<dyn MqttClient>, sources: Sources) -> Self {
+    pub(crate) fn new(
+        mqtt_client: Box<dyn MqttClient>,
+        sources: Sources,
+        shutdown: Shutdown,
+    ) -> Self {
         Self {
             mqtt_client,
             sources,
+            shutdown,
+            reconnect_delay: DEFAULT_RECONNECT_DELAY,
         }
     }
 
@@ -24,7 +35,7 @@ impl Receiver {
 
         info!("Waiting for messages ...");
 
-        while !is_shutdown_requested() {
+        while !self.shutdown.is_requested() {
             // Check for shutdown before processing next message
             let msg_opt = match stream.next() {
                 Ok(msg_opt) => msg_opt,
@@ -52,7 +63,7 @@ impl Receiver {
 
     fn handle_error(&mut self) {
         warn!("MQTT: lost connection -> Attempting reconnect");
-        while !is_shutdown_requested() {
+        while !self.shutdown.is_requested() {
             match self.mqtt_client.reconnect() {
                 Ok(_) => {
                     info!("MQTT: reconnected");
@@ -63,12 +74,12 @@ impl Receiver {
                     return;
                 }
                 Err(err) => {
-                    if is_shutdown_requested() {
+                    if self.shutdown.is_requested() {
                         warn!("MQTT: shutdown requested during reconnect, aborting");
                         return;
                     }
                     warn!("MQTT: error reconnecting: {}", err);
-                    thread::sleep(Duration::from_secs(5));
+                    thread::sleep(self.reconnect_delay);
                 }
             }
         }
@@ -105,7 +116,8 @@ mod tests {
             .returning(|_, _| Ok(ServerResponse::default()));
 
         let sources = sources();
-        let mut receiver = Receiver::new(mqtt_client, sources);
+        let mut receiver = Receiver::new(mqtt_client, sources, crate::Shutdown::new());
+        receiver.reconnect_delay = Duration::ZERO;
 
         receiver.handle_error();
         Ok(())
@@ -116,7 +128,7 @@ mod tests {
         let mqtt_client = mock_mqtt_client("bar/baz");
         let sources = sources();
         let handler_ref = sources.get_handler("bar").unwrap().clone();
-        let receiver = Receiver::new(mqtt_client, sources);
+        let receiver = Receiver::new(mqtt_client, sources, crate::Shutdown::new());
 
         let result = receiver.listen();
 
@@ -129,7 +141,7 @@ mod tests {
         let mqtt_client = mock_mqtt_client("test/test");
         let sources = sources();
         let handler_ref = sources.get_handler("bar").unwrap().clone();
-        let receiver = Receiver::new(mqtt_client, sources);
+        let receiver = Receiver::new(mqtt_client, sources, crate::Shutdown::new());
 
         let result = receiver.listen();
 
@@ -200,7 +212,7 @@ mod tests {
             .returning(|| Ok(ServerResponse::default()));
 
         let sources = sources();
-        let receiver = Receiver::new(mqtt_client, sources);
+        let receiver = Receiver::new(mqtt_client, sources, crate::Shutdown::new());
 
         let result = receiver.listen();
 

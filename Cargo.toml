@@ -13,6 +13,8 @@ serde = { version = "^1.0", features = ["derive"] }
 influxdb = "^0.8"
 chrono = "^0.4"
 postgres = { version = "^0.19" , features = ["with-chrono-0_4"] }
+postgres-native-tls = "0.5"
+native-tls = "0.2"
 serde_yaml_ng = { version = "^0.10", features = [] }
 anyhow = "^1.0"
 regex = "^1.12"

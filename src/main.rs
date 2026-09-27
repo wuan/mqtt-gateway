@@ -19,17 +19,33 @@ mod domain;
 mod source;
 mod target;
 
-/// Global flag for graceful shutdown
-static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+/// Shared, injectable shutdown signal.
+///
+/// Components poll [`Shutdown::is_requested`] instead of reading a global so
+/// the behaviour is testable and the flag can be reset between tests.
+#[derive(Clone)]
+pub struct Shutdown(Arc<AtomicBool>);
 
-/// Check if shutdown has been requested
-pub fn is_shutdown_requested() -> bool {
-    SHUTDOWN.load(Ordering::Relaxed)
+impl Shutdown {
+    pub fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+
+    /// Request a graceful shutdown.
+    pub fn request(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    /// Returns `true` once shutdown has been requested.
+    pub fn is_requested(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
 }
 
-/// Request shutdown
-pub fn request_shutdown() {
-    SHUTDOWN.store(true, Ordering::Relaxed);
+impl Default for Shutdown {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -55,16 +71,24 @@ fn main() -> anyhow::Result<()> {
     // Initialize the logger from the environment
     env_logger::init();
 
-    // Set up signal handlers for graceful shutdown
-    setup_signal_handlers()?;
+    // Shared shutdown signal for graceful shutdown
+    let shutdown = Shutdown::new();
+    setup_signal_handlers(&shutdown)?;
 
     let config_file_path = determine_config_file_path()
         .context("Failed to find configuration file in ./ or ./config/")?;
 
     let config_string = fs::read_to_string(&config_file_path)
         .with_context(|| format!("Failed to read config file: {}", config_file_path))?;
+    let config_string = config::expand_env(&config_string).with_context(|| {
+        format!(
+            "Failed to expand environment variables in {}",
+            config_file_path
+        )
+    })?;
     let config: config::Config = serde_yaml_ng::from_str(&config_string)
         .with_context(|| format!("Failed to parse config file: {}", config_file_path))?;
+    config.validate().context("Invalid configuration")?;
 
     debug!(
         "Loaded config with {} source(s), MQTT url '{}'",
@@ -76,7 +100,8 @@ fn main() -> anyhow::Result<()> {
 
     let receiver = Receiver::new(
         Box::new(MqttClientDefault::new(mqtt_client)),
-        Sources::new(config.sources)?,
+        Sources::new(config.sources, shutdown.clone())?,
+        shutdown,
     );
     receiver.listen()?;
 
@@ -84,22 +109,12 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Set up signal handlers for graceful shutdown on SIGINT (Ctrl+C) and SIGTERM
-fn setup_signal_handlers() -> anyhow::Result<()> {
-    let shutdown_flag = Arc::new(AtomicBool::new(false));
-    let flag_clone = shutdown_flag.clone();
-
-    // Register signal handlers
-    signal_hook::flag::register(SIGINT, flag_clone.clone())?;
-    signal_hook::flag::register(SIGTERM, flag_clone)?;
-
-    // Spawn a thread to watch for shutdown signals and set our global flag
-    std::thread::spawn(move || {
-        while !shutdown_flag.load(Ordering::Relaxed) {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        request_shutdown();
-    });
+/// Set up signal handlers for graceful shutdown on SIGINT (Ctrl+C) and SIGTERM.
+///
+/// `signal_hook` sets the flag directly, so no watcher thread is needed.
+fn setup_signal_handlers(shutdown: &Shutdown) -> anyhow::Result<()> {
+    signal_hook::flag::register(SIGINT, shutdown.0.clone())?;
+    signal_hook::flag::register(SIGTERM, shutdown.0.clone())?;
 
     Ok(())
 }
@@ -135,6 +150,18 @@ mod tests {
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_shutdown_flag_is_shared_between_clones() {
+        let shutdown = Shutdown::new();
+        assert!(!shutdown.is_requested());
+
+        let clone = shutdown.clone();
+        shutdown.request();
+
+        assert!(shutdown.is_requested());
+        assert!(clone.is_requested());
+    }
 
     #[test]
     fn test_determine_config_file_path_no_file() {
