@@ -97,9 +97,18 @@ fn main() -> anyhow::Result<()> {
     );
 
     let mqtt_client = source::mqtt::create_mqtt_client(&config.mqtt_url, &config.mqtt_client_id)?;
+    let tls = paho_mqtt::is_secure_uri(&config.mqtt_url);
+    if tls {
+        info!("Using TLS for the MQTT connection");
+    }
 
     let receiver = Receiver::new(
-        Box::new(MqttClientDefault::new(mqtt_client)),
+        Box::new(MqttClientDefault::new(
+            mqtt_client,
+            config.mqtt_username.clone(),
+            config.mqtt_password.clone(),
+            tls,
+        )),
         Sources::new(config.sources, shutdown.clone())?,
         shutdown,
     );

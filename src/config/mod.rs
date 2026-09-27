@@ -89,6 +89,10 @@ pub struct Config {
     pub(crate) mqtt_url: String,
     #[serde(rename = "mqttClientId")]
     pub(crate) mqtt_client_id: String,
+    #[serde(rename = "mqttUsername", default)]
+    pub(crate) mqtt_username: Option<String>,
+    #[serde(rename = "mqttPassword", default)]
+    pub(crate) mqtt_password: Option<String>,
 }
 
 impl Config {
@@ -228,6 +232,8 @@ mod tests {
             }],
             mqtt_url: "mqtt://localhost:1883".to_string(),
             mqtt_client_id: "test".to_string(),
+            mqtt_username: None,
+            mqtt_password: None,
         }
     }
 
@@ -290,6 +296,34 @@ mod tests {
     }
 
     #[test]
+    fn test_deserialize_config_without_credentials() {
+        let yaml = r#"
+    mqttUrl: "mqtt://localhost:1883"
+    mqttClientId: "test"
+    sources: []
+    "#;
+
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(config.mqtt_username.is_none());
+        assert!(config.mqtt_password.is_none());
+    }
+
+    #[test]
+    fn test_deserialize_config_with_credentials() {
+        let yaml = r#"
+    mqttUrl: "mqtts://localhost:8883"
+    mqttClientId: "test"
+    mqttUsername: "user"
+    mqttPassword: "secret"
+    sources: []
+    "#;
+
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(config.mqtt_username.as_deref(), Some("user"));
+        assert_eq!(config.mqtt_password.as_deref(), Some("secret"));
+    }
+
+    #[test]
     #[serial]
     fn test_expand_env_replaces_placeholders() {
         env::set_var("MQTT_GATEWAY_TEST_SECRET", "s3cr3t");
@@ -323,6 +357,8 @@ mod tests {
             }],
             mqtt_url: "mqtt://localhost:1883".to_string(),
             mqtt_client_id: "test".to_string(),
+            mqtt_username: None,
+            mqtt_password: None,
         };
 
         assert!(config.validate().is_ok());

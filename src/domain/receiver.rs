@@ -1,5 +1,5 @@
 use crate::domain::sources::Sources;
-use crate::domain::MqttClient;
+use crate::domain::{MqttClient, StreamEvent};
 use crate::Shutdown;
 use log::{info, warn};
 use std::thread;
@@ -7,6 +7,8 @@ use std::time::Duration;
 
 /// Delay between MQTT reconnect attempts.
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
+/// How long to wait for a message before re-checking the shutdown flag.
+const MQTT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) struct Receiver {
     mqtt_client: Box<dyn MqttClient>,
@@ -36,21 +38,18 @@ impl Receiver {
         info!("Waiting for messages ...");
 
         while !self.shutdown.is_requested() {
-            // Check for shutdown before processing next message
-            let msg_opt = match stream.next() {
-                Ok(msg_opt) => msg_opt,
+            // Poll with a timeout so a pending shutdown is observed even when
+            // no messages are arriving.
+            match stream.next(MQTT_POLL_INTERVAL) {
+                Ok(StreamEvent::Message(msg)) => self.sources.handle(msg),
+                Ok(StreamEvent::Timeout) => continue,
+                // Connection lost - try to reconnect.
+                Ok(StreamEvent::Disconnected) => self.handle_error(),
                 Err(err) => {
                     warn!("Error reading from MQTT stream: {}", err);
                     // On error from stream, break out of loop
                     break;
                 }
-            };
-
-            if let Some(msg) = msg_opt {
-                self.sources.handle(msg);
-            } else {
-                // Connection lost (msg_opt is None) - try to reconnect
-                self.handle_error();
             }
         }
 
@@ -155,8 +154,8 @@ mod tests {
         mqtt_client.expect_create().times(1).returning(move || {
             let mut stream = Box::new(crate::domain::MockStream::new());
             let topic_clone = topic_owned.clone(); // Clone again for the inner closure
-            stream.expect_next().times(1).returning(move || {
-                Ok(Some(paho_mqtt::Message::new(
+            stream.expect_next().times(1).returning(move |_| {
+                Ok(StreamEvent::Message(paho_mqtt::Message::new(
                     &topic_clone,
                     "test payload",
                     0,
@@ -165,7 +164,7 @@ mod tests {
             stream
                 .expect_next()
                 .times(1)
-                .returning(|| anyhow::Result::Err(Error::msg("test error")));
+                .returning(|_| anyhow::Result::Err(Error::msg("test error")));
             Ok(stream)
         });
 
@@ -190,11 +189,14 @@ mod tests {
         let mut mqtt_client = Box::new(crate::domain::MockMqttClient::new());
         mqtt_client.expect_create().times(1).returning(|| {
             let mut stream = Box::new(crate::domain::MockStream::new());
-            stream.expect_next().times(1).returning(|| Ok(None));
             stream
                 .expect_next()
                 .times(1)
-                .returning(|| Err(Error::msg("test error")));
+                .returning(|_| Ok(StreamEvent::Disconnected));
+            stream
+                .expect_next()
+                .times(1)
+                .returning(|_| Err(Error::msg("test error")));
             Ok(stream)
         });
 

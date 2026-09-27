@@ -19,8 +19,10 @@ and writes the data into InfluxDB / TimescaleDB (PostgreSQL) time series databas
 File `config.yml` in root folder:
 
 ```yaml
-mqttUrl: "mqtt://<hostname>:1883"
+mqttUrl: "mqtts://<hostname>:8883"   # use mqtt:// for an unencrypted connection
 mqttClientId: "sensors_gateway"
+mqttUsername: "${MQTT_USERNAME}"     # optional
+mqttPassword: "${MQTT_PASSWORD}"     # optional
 sources:
   - name: "Sensor data"
     type: "sensor"
@@ -62,6 +64,9 @@ sources:
 
 ### Configuration notes
 
+- **MQTT broker**: `mqttUrl`, `mqttClientId` and optional `mqttUsername` /
+  `mqttPassword`. A secure scheme (`ssl://`, `tls://`, `mqtts://` or `wss://`)
+  enables TLS with server-certificate verification.
 - **InfluxDB targets** take a `url` (for example `http://<host>:8086`) and either
   `user`/`password` or a `token`.
 - **PostgreSQL targets** are only supported for `sensor` and `shelly` sources,

@@ -28,12 +28,22 @@ mod tests {
 
     #[test]
     fn test_create_mqtt_client_connect_failure() {
-        // paho-mqtt accepts various URL formats at creation time
-        // Connection fails later with invalid URLs
-        let result = create_mqtt_client("tcp://invalid-host:1883", "test_client");
+        // paho-mqtt accepts various URL formats at creation time. Use a
+        // loopback address with a closed port so the failure is immediate and
+        // does not depend on DNS resolution.
+        let result = create_mqtt_client("tcp://127.0.0.1:1", "test_client");
         assert!(result.is_ok());
         let client = result.unwrap();
         let connect_result = client.connect(None);
         assert!(connect_result.is_err());
+    }
+
+    #[test]
+    fn test_secure_uri_detection() {
+        assert!(paho_mqtt::is_secure_uri("ssl://broker:8883"));
+        assert!(paho_mqtt::is_secure_uri("mqtts://broker:8883"));
+        assert!(paho_mqtt::is_secure_uri("wss://broker:443"));
+        assert!(!paho_mqtt::is_secure_uri("tcp://broker:1883"));
+        assert!(!paho_mqtt::is_secure_uri("mqtt://broker:1883"));
     }
 }

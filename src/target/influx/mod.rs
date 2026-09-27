@@ -118,7 +118,7 @@ fn influxdb_writer(
                     writer.queue(query);
                 }
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => writer.flush_if_due(),
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 writer.flush();
                 warn!(
@@ -172,6 +172,15 @@ impl Writer {
             self.start.elapsed() >= self.accumulation_time
         );
         if self.start.elapsed() >= self.accumulation_time {
+            self.flush();
+        }
+    }
+
+    /// Flush a pending batch once its accumulation window has elapsed, even
+    /// when no further event arrives to trigger the flush. Without this, the
+    /// last reading before a quiet period can sit unwritten indefinitely.
+    fn flush_if_due(&mut self) {
+        if !self.queries.is_empty() && self.start.elapsed() >= self.accumulation_time {
             self.flush();
         }
     }
@@ -371,6 +380,44 @@ mod tests {
         writer.queue(write_query());
 
         assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn test_flush_if_due_writes_pending_batch() {
+        let mut mock_client = Box::new(MockInfluxClient::new());
+        mock_client
+            .expect_write()
+            .times(1)
+            .returning(|_| Ok("test_data".to_string()));
+
+        let mut writer = Writer::new(mock_client, influx_config(), Duration::from_secs(5));
+        writer.queries.push(write_query());
+        // Pretend the accumulation window has already elapsed.
+        writer.start = Instant::now() - Duration::from_secs(10);
+
+        writer.flush_if_due();
+    }
+
+    #[test]
+    fn test_flush_if_due_waits_until_window_elapsed() {
+        let mut mock_client = Box::new(MockInfluxClient::new());
+        mock_client.expect_write().times(0);
+
+        let mut writer = Writer::new(mock_client, influx_config(), Duration::from_secs(60));
+        writer.queries.push(write_query());
+
+        writer.flush_if_due();
+    }
+
+    #[test]
+    fn test_flush_if_due_is_noop_without_pending_queries() {
+        let mut mock_client = Box::new(MockInfluxClient::new());
+        mock_client.expect_write().times(0);
+
+        let mut writer = Writer::new(mock_client, influx_config(), Duration::from_secs(0));
+        writer.start = Instant::now() - Duration::from_secs(10);
+
+        writer.flush_if_due();
     }
 
     #[test]
