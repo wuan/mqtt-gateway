@@ -119,8 +119,9 @@ fn main() -> anyhow::Result<()> {
     receiver.listen()?;
 
     info!(
-        "Shutdown complete ({} event(s) dropped, {} MQTT reconnect(s))",
+        "Shutdown complete ({} event(s) dropped, {} invalid timestamp(s), {} MQTT reconnect(s))",
         metrics::total(&metrics::EVENTS_DROPPED),
+        metrics::total(&metrics::INVALID_TIMESTAMP_EVENTS),
         metrics::total(&metrics::MQTT_RECONNECTS),
     );
     Ok(())

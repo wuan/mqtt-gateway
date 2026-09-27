@@ -290,16 +290,23 @@ fn spawn_writer(
     )
 }
 
+/// Log every invalid-timestamp event only up to this many, then every Nth.
+const INVALID_TIMESTAMP_LOG_EVERY: u64 = 1000;
+
 pub fn map_to_query(log_event: LogEvent) -> Option<WriteQuery> {
     // InfluxDB timestamps are unsigned; a negative or zero timestamp would wrap
     // to a nonsensical value, so drop the event instead.
     let timestamp = match u128::try_from(log_event.timestamp) {
         Ok(timestamp) if timestamp > 0 => timestamp,
         _ => {
-            warn!(
-                "InfluxDB: skipping '{}' with invalid timestamp {}",
-                log_event.measurement, log_event.timestamp
-            );
+            let count = crate::metrics::increment(&crate::metrics::INVALID_TIMESTAMP_EVENTS);
+            if crate::metrics::should_log(count, INVALID_TIMESTAMP_LOG_EVERY) {
+                warn!(
+                    "InfluxDB: skipping '{}' with invalid timestamp {} (tags: {:?}, \
+                     {} skipped so far)",
+                    log_event.measurement, log_event.timestamp, log_event.tags, count
+                );
+            }
             return None;
         }
     };

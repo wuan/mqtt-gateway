@@ -3,6 +3,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Cumulative number of events dropped because a target channel was full or
 /// disconnected.
 pub(crate) static EVENTS_DROPPED: AtomicU64 = AtomicU64::new(0);
+/// Cumulative number of events skipped because of an invalid timestamp.
+pub(crate) static INVALID_TIMESTAMP_EVENTS: AtomicU64 = AtomicU64::new(0);
 /// Cumulative number of failed InfluxDB batch writes (after retries).
 pub(crate) static INFLUX_WRITE_FAILURES: AtomicU64 = AtomicU64::new(0);
 /// Cumulative number of failed PostgreSQL batch writes (after retries).
