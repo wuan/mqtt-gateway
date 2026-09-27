@@ -6,7 +6,7 @@ use crate::data::{send_event, CheckMessage, LogEvent, LoggerResult};
 use crate::target::create_targets;
 use crate::Number;
 use crate::Shutdown;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use log::warn;
 use paho_mqtt::Message;
 use serde_json::{Map, Value};
@@ -18,12 +18,12 @@ struct Data {
 }
 
 pub struct OpenMqttGatewayLogger {
-    txs: Vec<SyncSender<LogEvent>>,
+    txs: Vec<SyncSender<Arc<LogEvent>>>,
     parser: OpenMqttGatewayParser,
 }
 
 impl OpenMqttGatewayLogger {
-    pub(crate) fn new(txs: Vec<SyncSender<LogEvent>>) -> Self {
+    pub(crate) fn new(txs: Vec<SyncSender<Arc<LogEvent>>>) -> Self {
         OpenMqttGatewayLogger {
             txs,
             parser: OpenMqttGatewayParser::new(),
@@ -57,7 +57,7 @@ impl CheckMessage for OpenMqttGatewayLogger {
                     .collect(),
                 data.fields.iter().map(|(k, v)| (k.clone(), *v)).collect(),
             );
-            send_event(&self.txs, &log_event);
+            send_event(&self.txs, Arc::new(log_event));
         }
     }
 
@@ -73,11 +73,9 @@ impl CheckMessage for OpenMqttGatewayLogger {
 }
 
 fn parse_json(payload: &str) -> Result<Map<String, Value>> {
-    let parsed: Value = serde_json::from_str(payload)?;
-    let obj: Map<String, Value> = parsed
-        .as_object()
-        .ok_or_else(|| anyhow!("expected a JSON object, got: {parsed}"))?
-        .clone();
+    // Deserialize straight into a map: going through `Value` would build the
+    // whole object once and then clone it again.
+    let obj: Map<String, Value> = serde_json::from_str(payload)?;
     Ok(obj)
 }
 

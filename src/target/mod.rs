@@ -6,6 +6,7 @@ use crate::target::influx::InfluxConfig;
 use crate::target::postgres::PostgresConfig;
 use crate::Shutdown;
 use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 pub(crate) mod influx;
@@ -14,10 +15,10 @@ pub(crate) mod postgres;
 pub(crate) mod debug;
 
 /// The senders and writer threads created for a source's targets.
-pub(crate) type TargetWriters = (Vec<SyncSender<LogEvent>>, Vec<JoinHandle<()>>);
+pub(crate) type TargetWriters = (Vec<SyncSender<Arc<LogEvent>>>, Vec<JoinHandle<()>>);
 
 pub fn create_targets(targets: Vec<Target>, shutdown: Shutdown) -> anyhow::Result<TargetWriters> {
-    let mut txs: Vec<SyncSender<LogEvent>> = Vec::new();
+    let mut txs: Vec<SyncSender<Arc<LogEvent>>> = Vec::new();
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
     for target in targets {

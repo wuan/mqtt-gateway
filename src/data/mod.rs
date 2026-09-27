@@ -85,12 +85,14 @@ pub trait CheckMessage {
 
 /// Forward an event to every target without blocking the receiving thread.
 ///
+/// The event is shared behind an [`Arc`] so fanning out to multiple targets
+/// only clones a pointer instead of deep-cloning the tags and fields maps.
 /// The target channels are bounded; if a writer cannot keep up we drop the
 /// event instead of blocking (and potentially deadlocking) the MQTT receive
 /// loop. A disconnected channel must never panic the process either.
-pub(crate) fn send_event(txs: &[SyncSender<LogEvent>], event: &LogEvent) {
+pub(crate) fn send_event(txs: &[SyncSender<Arc<LogEvent>>], event: Arc<LogEvent>) {
     for tx in txs {
-        match tx.try_send(event.clone()) {
+        match tx.try_send(Arc::clone(&event)) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
                 report_drop("target channel is full", &event.measurement);
@@ -130,16 +132,16 @@ mod tests {
         let (tx, rx) = sync_channel(1);
         drop(rx);
 
-        send_event(&[tx], &event());
+        send_event(&[tx], Arc::new(event()));
     }
 
     #[test]
     fn test_send_event_full_does_not_block_or_panic() {
         let (tx, rx) = sync_channel(1);
 
-        send_event(std::slice::from_ref(&tx), &event());
+        send_event(std::slice::from_ref(&tx), Arc::new(event()));
         // The channel is now full; this must be dropped rather than blocking.
-        send_event(std::slice::from_ref(&tx), &event());
+        send_event(std::slice::from_ref(&tx), Arc::new(event()));
 
         assert!(rx.try_recv().is_ok());
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
@@ -150,7 +152,7 @@ mod tests {
         let (tx1, rx1) = sync_channel(1);
         let (tx2, rx2) = sync_channel(1);
 
-        send_event(&[tx1, tx2], &event());
+        send_event(&[tx1, tx2], Arc::new(event()));
 
         assert!(rx1.try_recv().is_ok());
         assert!(rx2.try_recv().is_ok());

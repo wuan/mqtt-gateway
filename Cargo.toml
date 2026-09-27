@@ -28,3 +28,7 @@ signal-hook = "0.4"
 mockall = "^0.15"
 serial_test = "4.0.1"
 tempfile = "3.27.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -9,6 +9,7 @@ use postgres::Client;
 use postgres::{Error, NoTls};
 use std::collections::HashMap;
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
+use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -295,7 +296,7 @@ impl PostgresWriter {
         }
     }
 
-    fn run(&mut self, rx: Receiver<LogEvent>) {
+    fn run(&mut self, rx: Receiver<Arc<LogEvent>>) {
         loop {
             if self.shutdown.is_requested() {
                 info!("PostgreSQL: shutdown requested, draining queue");
@@ -316,7 +317,7 @@ impl PostgresWriter {
         info!("exiting postgres writer");
     }
 
-    fn drain(&mut self, rx: &Receiver<LogEvent>) {
+    fn drain(&mut self, rx: &Receiver<Arc<LogEvent>>) {
         while let Ok(event) = rx.try_recv() {
             self.push(&event);
         }
@@ -333,7 +334,7 @@ fn report_write_failure(measurement: &str, error: &dyn std::fmt::Display) {
 }
 
 fn start_postgres_writer(
-    rx: Receiver<LogEvent>,
+    rx: Receiver<Arc<LogEvent>>,
     client: Box<dyn PostgresClient>,
     reconnect: ReconnectClient,
     shutdown: Shutdown,
@@ -344,7 +345,7 @@ fn start_postgres_writer(
 pub fn spawn_postgres_writer(
     config: PostgresConfig,
     shutdown: Shutdown,
-) -> anyhow::Result<(SyncSender<LogEvent>, JoinHandle<()>)> {
+) -> anyhow::Result<(SyncSender<Arc<LogEvent>>, JoinHandle<()>)> {
     let client = create_postgres_client(&config)?;
     let reconnect_config = config.clone();
     let reconnect: ReconnectClient = Box::new(move || create_postgres_client(&reconnect_config));
@@ -385,7 +386,7 @@ pub(crate) fn spawn_postgres_writer_internal(
     client: Box<dyn PostgresClient>,
     reconnect: ReconnectClient,
     shutdown: Shutdown,
-) -> (SyncSender<LogEvent>, JoinHandle<()>) {
+) -> (SyncSender<Arc<LogEvent>>, JoinHandle<()>) {
     let (tx, rx) = sync_channel(100);
 
     (
@@ -525,7 +526,7 @@ mod tests {
         let (tx, join_handle) =
             spawn_postgres_writer_internal(mock_client, reconnect, Shutdown::new());
 
-        tx.send(log_event).unwrap();
+        tx.send(Arc::new(log_event)).unwrap();
 
         drop(tx);
 

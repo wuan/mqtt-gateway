@@ -22,12 +22,12 @@ struct Data {
 }
 
 pub struct OpenDTULogger {
-    txs: Vec<SyncSender<LogEvent>>,
+    txs: Vec<SyncSender<Arc<LogEvent>>>,
     parser: OpenDTUParser,
 }
 
 impl OpenDTULogger {
-    pub(crate) fn new(txs: Vec<SyncSender<LogEvent>>) -> Self {
+    pub(crate) fn new(txs: Vec<SyncSender<Arc<LogEvent>>>) -> Self {
         OpenDTULogger {
             txs,
             parser: OpenDTUParser::new(),
@@ -83,7 +83,7 @@ impl CheckMessage for OpenDTULogger {
                 tags.into_iter().collect(),
                 Number::Float(data.value),
             );
-            send_event(&self.txs, &log_event);
+            send_event(&self.txs, Arc::new(log_event));
         }
     }
 

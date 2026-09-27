@@ -9,11 +9,10 @@ use anyhow::Result;
 use data::{CoverData, SwitchData};
 use log::{debug, warn};
 use paho_mqtt::Message;
-use regex::Regex;
 use serde::Deserialize;
 use std::fmt::Debug;
 use std::sync::mpsc::SyncSender;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 
 pub trait Timestamped {
     fn timestamp(&self) -> Option<i64>;
@@ -24,11 +23,11 @@ pub trait Typenamed {
 }
 
 pub struct ShellyLogger {
-    txs: Vec<SyncSender<LogEvent>>,
+    txs: Vec<SyncSender<Arc<LogEvent>>>,
 }
 
 impl ShellyLogger {
-    pub(crate) fn new(txs: Vec<SyncSender<LogEvent>>) -> Self {
+    pub(crate) fn new(txs: Vec<SyncSender<Arc<LogEvent>>>) -> Self {
         ShellyLogger { txs }
     }
 }
@@ -105,17 +104,14 @@ const COVER_FIELDS: &[(&str, WriteTypeMapper<CoverData>, &str)] = &[
     ),
 ];
 
-static SWITCH_REGEX: LazyLock<Regex, fn() -> Regex> =
-    LazyLock::new(|| Regex::new("/status/switch:.").unwrap());
-static COVER_REGEX: LazyLock<Regex, fn() -> Regex> =
-    LazyLock::new(|| Regex::new("/status/cover:.").unwrap());
-
 impl CheckMessage for ShellyLogger {
     fn check_message(&mut self, msg: &Message) {
         let topic = msg.topic();
-        if SWITCH_REGEX.is_match(topic) {
+        // A plain substring test is equivalent to the previous `/status/(switch|cover):.`
+        // regexes but avoids running the regex engine on every message.
+        if topic.contains("/status/switch:") {
             handle_message(msg, &self.txs, SWITCH_FIELDS);
-        } else if COVER_REGEX.is_match(topic) {
+        } else if topic.contains("/status/cover:") {
             handle_message(msg, &self.txs, COVER_FIELDS);
         }
     }
@@ -133,11 +129,12 @@ impl CheckMessage for ShellyLogger {
 
 fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenamed>(
     msg: &'a Message,
-    txs: &[SyncSender<LogEvent>],
+    txs: &[SyncSender<Arc<LogEvent>>],
     fields: &[(&str, WriteTypeMapper<T>, &str)],
 ) {
-    let location = msg.topic().split("/").nth(1).unwrap();
-    let channel = msg.topic().split(":").last().unwrap();
+    let topic = msg.topic();
+    let location = topic.split('/').nth(1).unwrap();
+    let channel = topic.rsplit(':').next().unwrap();
     let parse_result: Result<Option<T>> = shelly::parse(msg);
     match parse_result {
         Ok(result) => {
@@ -163,7 +160,7 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
 }
 
 fn convert_measurements<T: Clone + Debug + Timestamped + Typenamed>(
-    txs: &[SyncSender<LogEvent>],
+    txs: &[SyncSender<Arc<LogEvent>>],
     fields: &[(&str, WriteTypeMapper<T>, &str)],
     location: &str,
     channel: &str,
@@ -181,7 +178,7 @@ fn convert_measurements<T: Clone + Debug + Timestamped + Typenamed>(
                 unit,
                 result,
             );
-            send_event(txs, &event);
+            send_event(txs, Arc::new(event));
         }
     }
 }
@@ -239,9 +236,9 @@ mod tests {
         }
     }
 
-    fn next(rx: &Receiver<LogEvent>) -> Result<LogEvent> {
+    fn next(rx: &Receiver<Arc<LogEvent>>) -> Result<LogEvent> {
         let result = rx.recv_timeout(Duration::from_micros(100))?;
-        Ok(result)
+        Ok((*result).clone())
     }
 
     struct EventAssert {

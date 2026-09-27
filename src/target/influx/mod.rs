@@ -8,6 +8,7 @@ use log::{info, trace, warn};
 #[cfg(test)]
 use mockall::automock;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::Arc;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -97,7 +98,7 @@ fn create_influxdb_client(influx_config: &InfluxConfig) -> anyhow::Result<Box<dy
 }
 
 fn influxdb_writer(
-    rx: Receiver<LogEvent>,
+    rx: Receiver<Arc<LogEvent>>,
     influx_client: Box<dyn InfluxClient>,
     influx_config: InfluxConfig,
     shutdown: Shutdown,
@@ -114,7 +115,7 @@ fn influxdb_writer(
             // Process the event before reacting to a shutdown request so it is
             // not silently dropped.
             Ok(event) => {
-                if let Some(query) = map_to_query(event) {
+                if let Some(query) = map_to_query(&event) {
                     writer.queue(query);
                 }
             }
@@ -263,7 +264,7 @@ impl Writer {
 pub fn spawn_influxdb_writer(
     influx_config: InfluxConfig,
     shutdown: Shutdown,
-) -> anyhow::Result<(SyncSender<LogEvent>, JoinHandle<()>)> {
+) -> anyhow::Result<(SyncSender<Arc<LogEvent>>, JoinHandle<()>)> {
     let influx_client =
         create_influxdb_client(&influx_config).context("Failed to create InfluxDB client")?;
 
@@ -274,7 +275,7 @@ fn spawn_writer(
     influx_client: Box<dyn InfluxClient>,
     influx_config: InfluxConfig,
     shutdown: Shutdown,
-) -> (SyncSender<LogEvent>, JoinHandle<()>) {
+) -> (SyncSender<Arc<LogEvent>>, JoinHandle<()>) {
     let (tx, rx) = sync_channel(100);
 
     (
@@ -293,7 +294,7 @@ fn spawn_writer(
 /// Log every invalid-timestamp event only up to this many, then every Nth.
 const INVALID_TIMESTAMP_LOG_EVERY: u64 = 1000;
 
-pub fn map_to_query(log_event: LogEvent) -> Option<WriteQuery> {
+pub fn map_to_query(log_event: &LogEvent) -> Option<WriteQuery> {
     // InfluxDB timestamps are unsigned; a negative or zero timestamp would wrap
     // to a nonsensical value, so drop the event instead.
     let timestamp = match u128::try_from(log_event.timestamp) {
@@ -311,20 +312,21 @@ pub fn map_to_query(log_event: LogEvent) -> Option<WriteQuery> {
         }
     };
 
-    let mut write_query = WriteQuery::new(Timestamp::Seconds(timestamp), log_event.measurement);
-    for (tag, value) in log_event.tags {
-        write_query = write_query.add_tag(tag, value);
+    let mut write_query =
+        WriteQuery::new(Timestamp::Seconds(timestamp), log_event.measurement.clone());
+    for (tag, value) in &log_event.tags {
+        write_query = write_query.add_tag(tag.as_str(), value.as_str());
     }
-    for (name, value) in log_event.fields {
+    for (name, value) in &log_event.fields {
         match value {
             Number::Int(value) => {
-                write_query = write_query.add_field(name, value);
+                write_query = write_query.add_field(name.as_str(), *value);
             }
             Number::UInt(value) => {
-                write_query = write_query.add_field(name, value);
+                write_query = write_query.add_field(name.as_str(), *value);
             }
             Number::Float(value) => {
-                write_query = write_query.add_field(name, value);
+                write_query = write_query.add_field(name.as_str(), *value);
             }
         }
     }
@@ -351,7 +353,7 @@ mod tests {
     }
 
     fn write_query() -> WriteQuery {
-        map_to_query(log_event()).expect("valid event")
+        map_to_query(&log_event()).expect("valid event")
     }
 
     fn influx_config() -> InfluxConfig {
@@ -366,10 +368,10 @@ mod tests {
 
     #[test]
     fn test_map_to_query_rejects_invalid_timestamps() {
-        assert!(map_to_query(log_event_at(0)).is_none());
-        assert!(map_to_query(log_event_at(-1)).is_none());
-        assert!(map_to_query(log_event_at(i64::MIN)).is_none());
-        assert!(map_to_query(log_event_at(1)).is_some());
+        assert!(map_to_query(&log_event_at(0)).is_none());
+        assert!(map_to_query(&log_event_at(-1)).is_none());
+        assert!(map_to_query(&log_event_at(i64::MIN)).is_none());
+        assert!(map_to_query(&log_event_at(1)).is_some());
     }
 
     #[test]
@@ -473,7 +475,7 @@ mod tests {
         });
 
         // Send a test query
-        tx.send(log_event())?;
+        tx.send(Arc::new(log_event()))?;
 
         // Close the channel
         drop(tx);
@@ -565,7 +567,7 @@ mod tests {
 
         let (tx, handle) = spawn_writer(mock_client, influx_config(), Shutdown::new());
 
-        tx.send(log_event())?;
+        tx.send(Arc::new(log_event()))?;
 
         drop(tx);
 

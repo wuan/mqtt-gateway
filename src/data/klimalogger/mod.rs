@@ -28,11 +28,11 @@ impl fmt::Debug for Data {
 }
 
 pub struct SensorLogger {
-    txs: Vec<SyncSender<LogEvent>>,
+    txs: Vec<SyncSender<Arc<LogEvent>>>,
 }
 
 impl SensorLogger {
-    pub(crate) fn new(tx: Vec<SyncSender<LogEvent>>) -> Self {
+    pub(crate) fn new(tx: Vec<SyncSender<Arc<LogEvent>>>) -> Self {
         SensorLogger { txs: tx }
     }
 
@@ -99,7 +99,7 @@ impl CheckMessage for SensorLogger {
                 Number::Float(result.value),
             );
 
-            send_event(&self.txs, &log_event);
+            send_event(&self.txs, Arc::new(log_event));
         } else {
             warn!("FAILED: {:?}, {:?}, {:?}", location, measurement, result);
         }
