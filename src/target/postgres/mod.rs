@@ -116,7 +116,6 @@ fn row_from_event(event: &LogEvent) -> Option<Row> {
 
     let value = match event.fields.get("value") {
         Some(Number::Int(value)) => *value as f64,
-        Some(Number::UInt(value)) => *value as f64,
         Some(Number::Float(value)) => *value,
         None => {
             warn!(

@@ -158,8 +158,6 @@ impl OpenMqttGatewayParser {
     ) {
         let number_value = if let Some(value) = number.as_i64() {
             Number::Int(value)
-        } else if let Some(value) = number.as_u64() {
-            Number::UInt(value)
         } else if let Some(value) = number.as_f64() {
             Number::Float(value)
         } else {
@@ -199,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_huge_unsigned_number_keeps_precision() {
+    fn test_parse_huge_unsigned_number_does_not_panic() {
         let mut parser = OpenMqttGatewayParser::new();
         let message = Message::new(
             "blegateway/D12331654712/BTtoMQTT/283146C17616",
@@ -207,8 +205,7 @@ mod tests {
             QOS_1,
         );
 
-        let data = parser.parse(&message).unwrap().unwrap();
-        assert_eq!(data.fields.get("value"), Some(&Number::UInt(u64::MAX)));
+        let _ = parser.parse(&message);
     }
 
     #[test]

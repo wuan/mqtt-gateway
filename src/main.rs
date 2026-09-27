@@ -62,9 +62,6 @@ pub struct SensorReading {
 #[serde(untagged)]
 pub enum Number {
     Int(i64),
-    /// Unsigned values larger than `i64::MAX`, which would otherwise lose
-    /// precision by being converted to `f64`.
-    UInt(u64),
     Float(f64),
 }
 

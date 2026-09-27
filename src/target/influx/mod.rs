@@ -322,9 +322,6 @@ pub fn map_to_query(log_event: &LogEvent) -> Option<WriteQuery> {
             Number::Int(value) => {
                 write_query = write_query.add_field(name.as_str(), *value);
             }
-            Number::UInt(value) => {
-                write_query = write_query.add_field(name.as_str(), *value);
-            }
             Number::Float(value) => {
                 write_query = write_query.add_field(name.as_str(), *value);
             }
