@@ -62,10 +62,15 @@ impl Receiver {
 
     fn handle_error(&mut self) {
         warn!("MQTT: lost connection -> Attempting reconnect");
+        let mut failures = 0;
         while !self.shutdown.is_requested() {
             match self.mqtt_client.reconnect() {
                 Ok(_) => {
-                    info!("MQTT: reconnected");
+                    let reconnects = crate::metrics::increment(&crate::metrics::MQTT_RECONNECTS);
+                    info!(
+                        "MQTT: reconnected after {} failed attempt(s) ({} reconnect(s) so far)",
+                        failures, reconnects
+                    );
                     // Re-subscribe in case the broker dropped the session.
                     if let Err(err) = self.sources.subscribe(self.mqtt_client.as_ref()) {
                         warn!("MQTT: failed to re-subscribe after reconnect: {}", err);
@@ -77,7 +82,8 @@ impl Receiver {
                         warn!("MQTT: shutdown requested during reconnect, aborting");
                         return;
                     }
-                    warn!("MQTT: error reconnecting: {}", err);
+                    failures += 1;
+                    warn!("MQTT: error reconnecting (attempt {}): {}", failures, err);
                     thread::sleep(self.reconnect_delay);
                 }
             }

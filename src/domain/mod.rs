@@ -86,9 +86,11 @@ impl MqttClient for MqttClientDefault {
     }
 
     fn create(&mut self) -> anyhow::Result<Box<dyn Stream>> {
-        let receiver = self.mqtt_client.start_consuming();
-
+        // Connect before starting the consumer so a failed connection does not
+        // leave a background consumer thread running.
         self.connect()?;
+
+        let receiver = self.mqtt_client.start_consuming();
 
         Ok(Box::new(StreamDefault::new(receiver)))
     }

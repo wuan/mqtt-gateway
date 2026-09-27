@@ -93,20 +93,28 @@ pub(crate) fn send_event(txs: &[SyncSender<LogEvent>], event: &LogEvent) {
         match tx.try_send(event.clone()) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
-                warn!(
-                    "dropping event for measurement '{}': target channel is full",
-                    event.measurement
-                );
+                report_drop("target channel is full", &event.measurement);
             }
             Err(TrySendError::Disconnected(_)) => {
-                warn!(
-                    "dropping event for measurement '{}': target channel is disconnected",
-                    event.measurement
-                );
+                report_drop("target channel is disconnected", &event.measurement);
             }
         }
     }
 }
+
+/// Log a dropped event, throttled to avoid flooding the log.
+fn report_drop(reason: &str, measurement: &str) {
+    let count = crate::metrics::increment(&crate::metrics::EVENTS_DROPPED);
+    if crate::metrics::should_log(count, DROP_LOG_EVERY) {
+        warn!(
+            "dropping event for measurement '{}': {} ({} event(s) dropped so far)",
+            measurement, reason, count
+        );
+    }
+}
+
+/// Log every drop only up to this many, then every Nth.
+const DROP_LOG_EVERY: u64 = 1000;
 
 #[cfg(test)]
 mod tests {

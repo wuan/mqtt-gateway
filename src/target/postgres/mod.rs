@@ -7,10 +7,18 @@ use mockall::automock;
 use postgres::types::ToSql;
 use postgres::Client;
 use postgres::{Error, NoTls};
+use std::collections::HashMap;
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::thread;
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// How long to wait for a message before re-checking shutdown/accumulation.
+const POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// Maximum number of rows collected before a batch is written.
+const BATCH_MAX_SIZE: usize = 100;
+/// Maximum time rows may sit in a batch before being written.
+const BATCH_MAX_DELAY: Duration = Duration::from_secs(1);
 
 /// Factory used to re-establish a lost Postgres connection.
 pub(crate) type ReconnectClient = Box<dyn Fn() -> anyhow::Result<Box<dyn PostgresClient>> + Send>;
@@ -71,38 +79,6 @@ impl PostgresClient for DefaultPostgresClient {
         self.client.execute(query, params)
     }
 }
-fn start_postgres_writer(
-    rx: Receiver<LogEvent>,
-    mut client: Box<dyn PostgresClient>,
-    reconnect: ReconnectClient,
-    shutdown: Shutdown,
-) {
-    loop {
-        // Check for shutdown request
-        if shutdown.is_requested() {
-            info!("PostgreSQL: shutdown requested, draining queue");
-            while let Ok(event) = rx.try_recv() {
-                write_event(&event, &mut client, &reconnect);
-            }
-            break;
-        }
-
-        // Use recv_timeout to allow periodic shutdown checks
-        match rx.recv_timeout(Duration::from_secs(1)) {
-            Ok(event) => write_event(&event, &mut client, &reconnect),
-            Err(RecvTimeoutError::Timeout) => continue,
-            Err(RecvTimeoutError::Disconnected) => {
-                warn!("PostgreSQL: channel disconnected, draining queue");
-                while let Ok(event) = rx.try_recv() {
-                    write_event(&event, &mut client, &reconnect);
-                }
-                break;
-            }
-        }
-    }
-    info!("exiting postgres writer");
-}
-
 /// Only allow plain identifiers as table names. The measurement is derived from
 /// MQTT topic segments, so anything else would allow SQL injection through the
 /// quoted identifier.
@@ -114,83 +90,255 @@ fn sanitize_measurement(name: &str) -> Option<&str> {
     }
 }
 
-fn write_event(
-    event: &LogEvent,
-    client: &mut Box<dyn PostgresClient>,
-    reconnect: &ReconnectClient,
-) {
+/// A single row ready to be inserted, extracted from a [`LogEvent`].
+struct Row {
+    measurement: String,
+    time: i64,
+    location: String,
+    sensor: String,
+    value: f64,
+}
+
+/// Extract a PostgreSQL row from an event, or `None` when the event does not
+/// carry the required schema (measurement, value, location, sensor).
+fn row_from_event(event: &LogEvent) -> Option<Row> {
     let measurement = match sanitize_measurement(&event.measurement) {
-        Some(measurement) => measurement,
+        Some(measurement) => measurement.to_string(),
         None => {
             warn!(
                 "PostgreSQL: skipping event with invalid measurement name '{}'",
                 event.measurement
             );
-            return;
+            return None;
         }
     };
 
     let value = match event.fields.get("value") {
         Some(Number::Int(value)) => *value as f64,
+        Some(Number::UInt(value)) => *value as f64,
         Some(Number::Float(value)) => *value,
         None => {
             warn!(
                 "PostgreSQL: skipping '{}' event without a 'value' field",
                 measurement
             );
-            return;
+            return None;
         }
     };
 
     let location = match event.tags.get("location") {
-        Some(location) => location,
+        Some(location) => location.clone(),
         None => {
             warn!(
                 "PostgreSQL: skipping '{}' event without a 'location' tag",
                 measurement
             );
-            return;
+            return None;
         }
     };
 
     let sensor = match event.tags.get("sensor") {
-        Some(sensor) => sensor,
+        Some(sensor) => sensor.clone(),
         None => {
             warn!(
                 "PostgreSQL: skipping '{}' event without a 'sensor' tag",
                 measurement
             );
-            return;
+            return None;
         }
     };
 
-    let statement = format!(
-        "insert into \"{}\" (time, location, sensor, value) values ($1, $2, $3, $4);",
-        measurement
-    );
-    let params: [&(dyn ToSql + Sync); 4] = [&event.timestamp, location, sensor, &value];
+    Some(Row {
+        measurement,
+        time: event.timestamp,
+        location,
+        sensor,
+        value,
+    })
+}
 
-    if let Err(error) = client.execute(&statement, &params) {
-        error!(
-            "#### Error writing to postgres: {} {:?}",
-            measurement, error
-        );
+struct PostgresWriter {
+    client: Box<dyn PostgresClient>,
+    reconnect: ReconnectClient,
+    shutdown: Shutdown,
+    pending: Vec<Row>,
+    max_size: usize,
+    max_delay: Duration,
+    first_queued_at: Option<Instant>,
+}
 
-        // The connection may be broken; try to reconnect once and retry.
-        match reconnect() {
-            Ok(mut new_client) => {
-                match new_client.execute(&statement, &params) {
-                    Ok(_) => info!("PostgreSQL: reconnected and retried '{}'", measurement),
-                    Err(error) => error!(
-                        "#### Error writing to postgres after reconnect: {} {:?}",
-                        measurement, error
-                    ),
-                }
-                *client = new_client;
-            }
-            Err(error) => error!("PostgreSQL: reconnect failed: {}", error),
+impl PostgresWriter {
+    fn new(
+        client: Box<dyn PostgresClient>,
+        reconnect: ReconnectClient,
+        shutdown: Shutdown,
+    ) -> Self {
+        Self {
+            client,
+            reconnect,
+            shutdown,
+            pending: Vec::new(),
+            max_size: BATCH_MAX_SIZE,
+            max_delay: BATCH_MAX_DELAY,
+            first_queued_at: None,
         }
     }
+
+    fn push(&mut self, event: &LogEvent) {
+        if let Some(row) = row_from_event(event) {
+            if self.first_queued_at.is_none() {
+                self.first_queued_at = Some(Instant::now());
+            }
+            self.pending.push(row);
+        }
+        if self.pending.len() >= self.max_size {
+            self.flush();
+        }
+    }
+
+    /// Flush a batch once its size or age exceeds the configured limits.
+    fn flush_if_due(&mut self) {
+        let due = self.pending.len() >= self.max_size
+            || self
+                .first_queued_at
+                .is_some_and(|queued| queued.elapsed() >= self.max_delay);
+        if due {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+
+        let rows = std::mem::take(&mut self.pending);
+        self.first_queued_at = None;
+
+        let mut by_measurement: HashMap<&str, Vec<&Row>> = HashMap::new();
+        for row in &rows {
+            by_measurement
+                .entry(row.measurement.as_str())
+                .or_default()
+                .push(row);
+        }
+
+        let query_count = rows.len();
+        let start = Instant::now();
+        for (measurement, group) in by_measurement {
+            self.write_group(measurement, &group);
+        }
+        info!(
+            "PostgreSQL: write #{} row(s) in {:.3} s",
+            query_count,
+            start.elapsed().as_secs_f64()
+        );
+    }
+
+    /// Write one measurement's rows with a single multi-row `INSERT`.
+    fn write_group(&mut self, measurement: &str, rows: &[&Row]) {
+        let mut statement = format!(
+            "insert into \"{}\" (time, location, sensor, value) values",
+            measurement
+        );
+        for index in 0..rows.len() {
+            if index > 0 {
+                statement.push(',');
+            }
+            let base = index * 4;
+            statement.push_str(&format!(
+                " (${}, ${}, ${}, ${})",
+                base + 1,
+                base + 2,
+                base + 3,
+                base + 4
+            ));
+        }
+        statement.push(';');
+
+        // Owned storage so the borrowed parameter slice stays valid.
+        let times: Vec<i64> = rows.iter().map(|row| row.time).collect();
+        let locations: Vec<&str> = rows.iter().map(|row| row.location.as_str()).collect();
+        let sensors: Vec<&str> = rows.iter().map(|row| row.sensor.as_str()).collect();
+        let values: Vec<f64> = rows.iter().map(|row| row.value).collect();
+        let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(rows.len() * 4);
+        for index in 0..rows.len() {
+            params.push(&times[index]);
+            params.push(&locations[index]);
+            params.push(&sensors[index]);
+            params.push(&values[index]);
+        }
+
+        if let Err(error) = self.client.execute(&statement, &params) {
+            error!(
+                "#### Error writing to postgres: {} {:?}",
+                measurement, error
+            );
+
+            // The connection may be broken; try to reconnect once and retry.
+            match (self.reconnect)() {
+                Ok(mut new_client) => {
+                    match new_client.execute(&statement, &params) {
+                        Ok(_) => {
+                            info!("PostgreSQL: reconnected and retried '{}'", measurement)
+                        }
+                        Err(error) => {
+                            report_write_failure(measurement, &error);
+                        }
+                    }
+                    self.client = new_client;
+                }
+                Err(error) => {
+                    report_write_failure(measurement, &error);
+                }
+            }
+        }
+    }
+
+    fn run(&mut self, rx: Receiver<LogEvent>) {
+        loop {
+            if self.shutdown.is_requested() {
+                info!("PostgreSQL: shutdown requested, draining queue");
+                self.drain(&rx);
+                break;
+            }
+
+            match rx.recv_timeout(POLL_INTERVAL) {
+                Ok(event) => self.push(&event),
+                Err(RecvTimeoutError::Timeout) => self.flush_if_due(),
+                Err(RecvTimeoutError::Disconnected) => {
+                    warn!("PostgreSQL: channel disconnected, draining queue");
+                    self.drain(&rx);
+                    break;
+                }
+            }
+        }
+        info!("exiting postgres writer");
+    }
+
+    fn drain(&mut self, rx: &Receiver<LogEvent>) {
+        while let Ok(event) = rx.try_recv() {
+            self.push(&event);
+        }
+        self.flush();
+    }
+}
+
+fn report_write_failure(measurement: &str, error: &dyn std::fmt::Display) {
+    let failures = crate::metrics::increment(&crate::metrics::POSTGRES_WRITE_FAILURES);
+    error!(
+        "#### Error writing to postgres: {} {} ({} batch failure(s) so far)",
+        measurement, error, failures
+    );
+}
+
+fn start_postgres_writer(
+    rx: Receiver<LogEvent>,
+    client: Box<dyn PostgresClient>,
+    reconnect: ReconnectClient,
+    shutdown: Shutdown,
+) {
+    PostgresWriter::new(client, reconnect, shutdown).run(rx);
 }
 
 pub fn spawn_postgres_writer(
@@ -268,12 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write_event_skips_events_without_postgres_schema() {
-        let mut mock = MockPostgresClient::new();
-        mock.expect_execute().times(0);
-        let mut mock_client: Box<dyn PostgresClient> = Box::new(mock);
-        let reconnect = unreachable_reconnect();
-
+    fn test_row_from_event_skips_events_without_postgres_schema() {
         // No `value` field and no `location`/`sensor` tags (e.g. BLE events).
         let event = LogEvent::new(
             "btle".to_string(),
@@ -282,16 +425,11 @@ mod tests {
             HashMap::from([("rssi".to_string(), Number::Int(-92))]),
         );
 
-        write_event(&event, &mut mock_client, &reconnect);
+        assert!(row_from_event(&event).is_none());
     }
 
     #[test]
-    fn test_write_event_skips_invalid_measurement() {
-        let mut mock = MockPostgresClient::new();
-        mock.expect_execute().times(0);
-        let mut mock_client: Box<dyn PostgresClient> = Box::new(mock);
-        let reconnect = unreachable_reconnect();
-
+    fn test_row_from_event_skips_invalid_measurement() {
         let event = LogEvent::new(
             "invalid;drop".to_string(),
             0,
@@ -302,7 +440,60 @@ mod tests {
             HashMap::from([("value".to_string(), Number::Float(1.0))]),
         );
 
-        write_event(&event, &mut mock_client, &reconnect);
+        assert!(row_from_event(&event).is_none());
+    }
+
+    #[test]
+    fn test_row_from_event_extracts_schema() {
+        let event = LogEvent::new_value_from_ref(
+            "temperature".to_string(),
+            1_701_292_592,
+            vec![("location", "home"), ("sensor", "BME680")]
+                .into_iter()
+                .collect(),
+            Number::Float(19.5),
+        );
+
+        let row = row_from_event(&event).expect("row");
+        assert_eq!(row.measurement, "temperature");
+        assert_eq!(row.time, 1_701_292_592);
+        assert_eq!(row.location, "home");
+        assert_eq!(row.sensor, "BME680");
+        assert_eq!(row.value, 19.5);
+    }
+
+    #[test]
+    fn test_write_group_batches_multiple_rows_into_one_statement() {
+        let mut mock = MockPostgresClient::new();
+        mock.expect_execute()
+            .times(1)
+            .withf(|query, params| {
+                query
+                    == "insert into \"t\" (time, location, sensor, value) values \
+                        ($1, $2, $3, $4), ($5, $6, $7, $8);"
+                    && params.len() == 8
+            })
+            .returning(|_, _| Ok(2));
+
+        let client: Box<dyn PostgresClient> = Box::new(mock);
+        let mut writer = PostgresWriter::new(client, unreachable_reconnect(), Shutdown::new());
+        writer.pending.push(Row {
+            measurement: "t".to_string(),
+            time: 1,
+            location: "a".to_string(),
+            sensor: "s".to_string(),
+            value: 1.0,
+        });
+        writer.pending.push(Row {
+            measurement: "t".to_string(),
+            time: 2,
+            location: "b".to_string(),
+            sensor: "s".to_string(),
+            value: 2.0,
+        });
+
+        writer.flush();
+        assert!(writer.pending.is_empty());
     }
 
     #[test]

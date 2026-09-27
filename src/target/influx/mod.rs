@@ -202,9 +202,13 @@ impl Writer {
                 Ok(_) => break,
                 Err(error) => {
                     if attempt >= self.max_attempts {
+                        let failures =
+                            crate::metrics::increment(&crate::metrics::INFLUX_WRITE_FAILURES);
                         log::error!(
-                            "#### Error writing to influx after {} attempt(s): {} {}: {:?}",
+                            "#### Error writing to influx after {} attempt(s) \
+                             ({} batch failure(s) so far): {} {}: {:?}",
                             attempt,
+                            failures,
                             self.influx_config.url,
                             self.influx_config.database,
                             error
@@ -307,6 +311,9 @@ pub fn map_to_query(log_event: LogEvent) -> Option<WriteQuery> {
     for (name, value) in log_event.fields {
         match value {
             Number::Int(value) => {
+                write_query = write_query.add_field(name, value);
+            }
+            Number::UInt(value) => {
                 write_query = write_query.add_field(name, value);
             }
             Number::Float(value) => {
