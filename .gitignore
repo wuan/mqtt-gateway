@@ -1,6 +1,7 @@
 /target
 /.idea
 /config.yml
+/config/config.yml
 /.envrc	
 /cobertura.xml
 /clippy.json

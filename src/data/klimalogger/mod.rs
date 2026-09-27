@@ -2,7 +2,7 @@ use std::fmt;
 use std::sync::mpsc::SyncSender;
 
 use crate::config::Target;
-use crate::data::{CheckMessage, LogEvent};
+use crate::data::{send_event, CheckMessage, LogEvent, LoggerResult};
 use crate::target::create_targets;
 use crate::Number;
 use anyhow::Result;
@@ -11,12 +11,11 @@ use log::{debug, warn};
 use paho_mqtt::Message;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Data {
     #[serde(rename = "time")]
-    pub(crate) timestamp: i32,
+    pub(crate) timestamp: i64,
     pub(crate) value: f64,
     pub(crate) sensor: String,
 }
@@ -36,16 +35,14 @@ impl SensorLogger {
         SensorLogger { txs: tx }
     }
 
-    fn convert_timestamp(timestamp: i64) -> DateTime<Utc> {
-        chrono::DateTime::from_timestamp(timestamp, 0).expect("failed to convert timestamp")
+    fn convert_timestamp(timestamp: i64) -> Option<DateTime<Utc>> {
+        chrono::DateTime::from_timestamp(timestamp, 0)
     }
 }
 
 const MAX_TIME_OFFSET_SECONDS: i64 = 60;
 
-pub fn create_logger(
-    targets: Vec<Target>,
-) -> Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
+pub fn create_logger(targets: Vec<Target>) -> Result<LoggerResult> {
     let (txs, handles) = create_targets(targets)?;
 
     Ok((Arc::new(Mutex::new(SensorLogger::new(txs))), handles))
@@ -59,7 +56,17 @@ impl CheckMessage for SensorLogger {
         let measurement = split.next();
         let result = parse(msg);
         if let (Some(location), Some(measurement), Ok(result)) = (location, measurement, &result) {
-            let date_time = Self::convert_timestamp(result.timestamp as i64);
+            let date_time = match Self::convert_timestamp(result.timestamp) {
+                Some(date_time) => date_time,
+                None => {
+                    warn!(
+                        "invalid timestamp {} from {}",
+                        result.timestamp,
+                        msg.topic()
+                    );
+                    return;
+                }
+            };
 
             let now = chrono::offset::Utc::now();
             let difference = now - date_time;
@@ -68,11 +75,11 @@ impl CheckMessage for SensorLogger {
                 "Sensor {} \"{}\": {:?} {:.2}s",
                 location,
                 measurement,
-                &result,
+                result,
                 difference.num_milliseconds() as f32 / 1000.0,
             );
 
-            if difference.num_seconds() > MAX_TIME_OFFSET_SECONDS {
+            if difference.num_seconds().abs() > MAX_TIME_OFFSET_SECONDS {
                 warn!(
                     "*** HIGH TIME OFFSET *** {} : {} - {}",
                     log_message, now, date_time
@@ -91,11 +98,9 @@ impl CheckMessage for SensorLogger {
                 Number::Float(result.value),
             );
 
-            for tx in &self.txs {
-                tx.send(log_event.clone()).expect("failed to send");
-            }
+            send_event(&self.txs, &log_event);
         } else {
-            warn!("FAILED: {:?}, {:?}, {:?}", location, measurement, &result);
+            warn!("FAILED: {:?}, {:?}, {:?}", location, measurement, result);
         }
     }
 
@@ -147,7 +152,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "invalid type: string \"foo\", expected i32 at line 1 column 34"
+            "invalid type: string \"foo\", expected i64 at line 1 column 34"
         );
 
         Ok(())
@@ -192,6 +197,38 @@ mod tests {
         let result = rx.recv_timeout(std::time::Duration::from_secs(1));
 
         assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_message_handles_future_timestamp() -> Result<()> {
+        let topic = "klimalogger/location/temperature";
+        let future_timestamp = chrono::offset::Utc::now().timestamp() + 3600;
+        let payload = format!(
+            "{{\"sensor\": \"BME680\", \"time\": {}, \"value\": 19.45}}",
+            future_timestamp
+        );
+
+        let (tx, rx) = sync_channel(100);
+        let mut logger = SensorLogger::new(vec![tx]);
+        logger.check_message(&Message::new(topic, payload, QOS_1));
+
+        assert!(rx.try_recv().is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_message_handles_overflow_timestamp() -> Result<()> {
+        let topic = "klimalogger/location/temperature";
+        let payload = "{\"sensor\": \"BME680\", \"time\": 9223372036854775807, \"value\": 19.45}";
+
+        let (tx, rx) = sync_channel(100);
+        let mut logger = SensorLogger::new(vec![tx]);
+        logger.check_message(&Message::new(topic, payload, QOS_1));
+
+        assert!(rx.try_recv().is_err());
 
         Ok(())
     }

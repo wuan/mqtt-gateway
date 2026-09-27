@@ -2,15 +2,14 @@ use std::collections::HashMap;
 use std::sync::mpsc::SyncSender;
 
 use crate::config::Target;
-use crate::data::{CheckMessage, LogEvent};
+use crate::data::{send_event, CheckMessage, LogEvent, LoggerResult};
 use crate::target::create_targets;
 use crate::Number;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use log::warn;
 use paho_mqtt::Message;
 use serde_json::{Map, Value};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
 
 struct Data {
     fields: HashMap<String, Number>,
@@ -33,7 +32,18 @@ impl OpenMqttGatewayLogger {
 
 impl CheckMessage for OpenMqttGatewayLogger {
     fn check_message(&mut self, msg: &Message) {
-        let data = self.parser.parse(msg).unwrap();
+        let data = match self.parser.parse(msg) {
+            Ok(data) => data,
+            Err(error) => {
+                warn!(
+                    "OpenMQTTGateway parse error: {} on '{}' (topic: {})",
+                    error,
+                    msg.payload_str(),
+                    msg.topic()
+                );
+                return;
+            }
+        };
         if let Some(data) = data {
             let timestamp = chrono::offset::Utc::now();
 
@@ -44,14 +54,9 @@ impl CheckMessage for OpenMqttGatewayLogger {
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
-                data.fields
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
+                data.fields.iter().map(|(k, v)| (k.clone(), *v)).collect(),
             );
-            for tx in &self.txs {
-                tx.send(log_event.clone()).expect("failed to send");
-            }
+            send_event(&self.txs, &log_event);
         }
     }
 
@@ -68,7 +73,10 @@ impl CheckMessage for OpenMqttGatewayLogger {
 
 fn parse_json(payload: &str) -> Result<Map<String, Value>> {
     let parsed: Value = serde_json::from_str(payload)?;
-    let obj: Map<String, Value> = parsed.as_object().unwrap().clone();
+    let obj: Map<String, Value> = parsed
+        .as_object()
+        .ok_or_else(|| anyhow!("expected a JSON object, got: {parsed}"))?
+        .clone();
     Ok(obj)
 }
 
@@ -112,7 +120,7 @@ impl OpenMqttGatewayParser {
                 } else if !tags.contains_key("type") {
                     tags.insert(String::from("type"), String::from("UNKN"));
                 }
-                if fields.len() > 0 {
+                if !fields.is_empty() {
                     data = Some(Data { fields, tags });
                 } else {
                     warn!("skip without fields {:?}", tags)
@@ -123,14 +131,14 @@ impl OpenMqttGatewayParser {
     }
 
     fn convert_value(
-        mut fields: &mut HashMap<String, Number>,
+        fields: &mut HashMap<String, Number>,
         tags: &mut HashMap<String, String>,
         key: String,
         value: Value,
     ) {
         match value {
             Value::Number(number) => {
-                Self::convert_number(&mut fields, key, number);
+                Self::convert_number(fields, key, number);
             }
             Value::String(value) => {
                 tags.insert(key, value);
@@ -146,20 +154,73 @@ impl OpenMqttGatewayParser {
         key: String,
         number: serde_json::Number,
     ) {
-        let number_value = if number.is_f64() {
-            Number::Float(number.as_f64().unwrap())
+        let number_value = if let Some(value) = number.as_i64() {
+            Number::Int(value)
+        } else if let Some(value) = number.as_f64() {
+            Number::Float(value)
         } else {
-            Number::Int(number.as_i64().unwrap())
+            // e.g. a u64 larger than i64::MAX.
+            warn!("OpenMQTTGateway: unsupported number value {}", number);
+            return;
         };
         fields.insert(key, number_value);
     }
 }
 
+pub fn create_logger(targets: Vec<Target>) -> Result<LoggerResult> {
+    let (txs, handles) = create_targets(targets)?;
+
+    Ok((
+        Arc::new(Mutex::new(OpenMqttGatewayLogger::new(txs))),
+        handles,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use paho_mqtt::QOS_1;
+    use std::sync::mpsc::sync_channel;
 
     use super::*;
+
+    #[test]
+    fn test_parse_non_object_payload_is_error() {
+        let mut parser = OpenMqttGatewayParser::new();
+        let message = Message::new(
+            "blegateway/D12331654712/BTtoMQTT/283146C17616",
+            "[1,2,3]",
+            QOS_1,
+        );
+
+        assert!(parser.parse(&message).is_err());
+    }
+
+    #[test]
+    fn test_parse_huge_unsigned_number_does_not_panic() {
+        let mut parser = OpenMqttGatewayParser::new();
+        let message = Message::new(
+            "blegateway/D12331654712/BTtoMQTT/283146C17616",
+            "{\"value\": 18446744073709551615}",
+            QOS_1,
+        );
+
+        let _ = parser.parse(&message);
+    }
+
+    #[test]
+    fn test_check_message_malformed_payload_does_not_panic() {
+        let (tx, rx) = sync_channel(100);
+        let mut logger = OpenMqttGatewayLogger::new(vec![tx]);
+
+        let message = Message::new(
+            "blegateway/D12331654712/BTtoMQTT/283146C17616",
+            "not json at all",
+            QOS_1,
+        );
+        logger.check_message(&message);
+
+        assert!(rx.try_recv().is_err());
+    }
 
     #[test]
     fn test_parse() -> Result<()> {
@@ -234,15 +295,4 @@ mod tests {
 
         Ok(())
     }
-}
-
-pub fn create_logger(
-    targets: Vec<Target>,
-) -> Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
-    let (txs, handles) = create_targets(targets)?;
-
-    Ok((
-        Arc::new(Mutex::new(OpenMqttGatewayLogger::new(txs))),
-        handles,
-    ))
 }

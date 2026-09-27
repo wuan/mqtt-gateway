@@ -12,9 +12,10 @@ pub(crate) mod postgres;
 
 pub(crate) mod debug;
 
-pub fn create_targets(
-    targets: Vec<Target>,
-) -> anyhow::Result<(Vec<SyncSender<LogEvent>>, Vec<JoinHandle<()>>)> {
+/// The senders and writer threads created for a source's targets.
+pub(crate) type TargetWriters = (Vec<SyncSender<LogEvent>>, Vec<JoinHandle<()>>);
+
+pub fn create_targets(targets: Vec<Target>) -> anyhow::Result<TargetWriters> {
     let mut txs: Vec<SyncSender<LogEvent>> = Vec::new();
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
@@ -79,10 +80,7 @@ mod tests {
 
     #[test]
     fn test_create_targets_multiple() {
-        let targets = vec![
-            Target::Debug {},
-            Target::Debug {},
-        ];
+        let targets = vec![Target::Debug {}, Target::Debug {}];
         let result = create_targets(targets);
         assert!(result.is_ok());
         let (txs, handles) = result.unwrap();

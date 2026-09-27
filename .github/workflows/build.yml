@@ -70,6 +70,9 @@ jobs:
       - name: Build
         run: cargo build
 
+      - name: Check formatting
+        run: cargo fmt -- --check
+
   # Coverage + clippy feed the Sonar scan, so they share a job: both reuse the
   # debug `target` cache and Sonar wants their reports together (`cobertura.xml`
   # and `clippy.json`, see sonar-project.properties).
@@ -133,7 +136,7 @@ jobs:
         run: cargo llvm-cov --cobertura --output-path cobertura.xml
 
       - name: Run Clippy
-        run: cargo clippy --message-format=json &> clippy.json
+        run: cargo clippy --all-targets --message-format=json -- -D warnings &> clippy.json
 
       - name: Update Sonar
         uses: sonarsource/sonarqube-scan-action@v8

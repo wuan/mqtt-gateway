@@ -20,7 +20,7 @@ impl Receiver {
 
     pub(crate) fn listen(mut self) -> anyhow::Result<()> {
         let mut stream = self.mqtt_client.create()?;
-        self.sources.subscribe(&self.mqtt_client)?;
+        self.sources.subscribe(self.mqtt_client.as_ref())?;
 
         info!("Waiting for messages ...");
 
@@ -56,6 +56,10 @@ impl Receiver {
             match self.mqtt_client.reconnect() {
                 Ok(_) => {
                     info!("MQTT: reconnected");
+                    // Re-subscribe in case the broker dropped the session.
+                    if let Err(err) = self.sources.subscribe(self.mqtt_client.as_ref()) {
+                        warn!("MQTT: failed to re-subscribe after reconnect: {}", err);
+                    }
                     return;
                 }
                 Err(err) => {
@@ -84,17 +88,21 @@ mod tests {
     #[test]
     fn test_receiver_reconnect() -> anyhow::Result<()> {
         let mut mqtt_client = Box::new(crate::domain::MockMqttClient::new());
-        mqtt_client.expect_reconnect().times(2).returning(|| {
-            static mut CALLED: bool = false;
-            unsafe {
-                if !CALLED {
-                    CALLED = true;
+        mqtt_client.expect_reconnect().times(2).returning({
+            let mut calls = 0;
+            move || {
+                calls += 1;
+                if calls == 1 {
                     Err(anyhow::Error::msg("Connection failed"))
                 } else {
                     Ok(ServerResponse::default())
                 }
             }
         });
+        mqtt_client
+            .expect_subscribe_many()
+            .times(1)
+            .returning(|_, _| Ok(ServerResponse::default()));
 
         let sources = sources();
         let mut receiver = Receiver::new(mqtt_client, sources);
@@ -153,8 +161,8 @@ mod tests {
             .expect_subscribe_many()
             .times(1)
             .with(
-                function(|topics: &Vec<String>| topics[0] == "bar/#"),
-                function(|qoss: &Vec<i32>| qoss[0] == 1),
+                function(|topics: &[String]| topics[0] == "bar/#"),
+                function(|qoss: &[i32]| qoss[0] == 1),
             )
             .returning(|_, _| Ok(ServerResponse::default()));
 
@@ -180,10 +188,10 @@ mod tests {
 
         mqtt_client
             .expect_subscribe_many()
-            .times(1)
+            .times(2)
             .with(
-                function(|topics: &Vec<String>| topics[0] == "bar/#"),
-                function(|qoss: &Vec<i32>| qoss[0] == 1),
+                function(|topics: &[String]| topics[0] == "bar/#"),
+                function(|qoss: &[i32]| qoss[0] == 1),
             )
             .returning(|_, _| Ok(ServerResponse::default()));
         mqtt_client

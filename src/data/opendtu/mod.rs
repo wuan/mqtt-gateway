@@ -2,15 +2,14 @@ use std::borrow::Cow;
 use std::sync::mpsc::SyncSender;
 
 use crate::config::Target;
-use crate::data::{CheckMessage, LogEvent};
+use crate::data::{send_event, CheckMessage, LogEvent, LoggerResult};
 use crate::target::create_targets;
 use crate::Number;
 use anyhow::Result;
 use chrono::Datelike;
-use log::{debug, trace};
+use log::{debug, trace, warn};
 use paho_mqtt::Message;
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
 
 struct Data {
     timestamp: i64,
@@ -37,10 +36,30 @@ impl OpenDTULogger {
 
 impl CheckMessage for OpenDTULogger {
     fn check_message(&mut self, msg: &Message) {
-        let result1 = self.parser.parse(msg).unwrap();
+        let result1 = match self.parser.parse(msg) {
+            Ok(result) => result,
+            Err(error) => {
+                warn!(
+                    "OpenDTU parse error: {} on '{}' (topic: {})",
+                    error,
+                    msg.payload_str(),
+                    msg.topic()
+                );
+                return;
+            }
+        };
         if let Some(data) = result1 {
-            let timestamp = chrono::DateTime::from_timestamp(data.timestamp, 0)
-                .expect("failed to convert timestamp");
+            let timestamp = match chrono::DateTime::from_timestamp(data.timestamp, 0) {
+                Some(timestamp) => timestamp,
+                None => {
+                    warn!(
+                        "OpenDTU: invalid timestamp {} on '{}'",
+                        data.timestamp,
+                        msg.topic()
+                    );
+                    return;
+                }
+            };
             let month_string = timestamp.month().to_string();
             let year_string = timestamp.year().to_string();
             let year_month_string = format!("{:04}-{:02}", timestamp.year(), timestamp.month());
@@ -63,9 +82,7 @@ impl CheckMessage for OpenDTULogger {
                 tags.into_iter().collect(),
                 Number::Float(data.value),
             );
-            for tx in &self.txs {
-                tx.send(log_event.clone()).expect("failed to send");
-            }
+            send_event(&self.txs, &log_event);
         }
     }
 
@@ -119,7 +136,7 @@ impl OpenDTUParser {
                     }
                     _ => {
                         let payload = msg.payload_str();
-                        if payload.len() > 0 {
+                        if !payload.is_empty() {
                             if let Some(timestamp) = self.timestamp {
                                 data =
                                     Self::map_string(section, element, field, payload, timestamp);
@@ -143,6 +160,16 @@ impl OpenDTUParser {
         payload: Cow<str>,
         timestamp: i64,
     ) -> Option<Data> {
+        let value = match payload.parse() {
+            Ok(value) => value,
+            Err(error) => {
+                warn!(
+                    "OpenDTU: cannot parse {} string {}:{} value {:?}: {}",
+                    section, element, field, payload, error
+                );
+                return None;
+            }
+        };
         debug!(
             "OpenDTU {} string {:}: {:}: {:?}",
             section, element, field, payload
@@ -153,11 +180,24 @@ impl OpenDTUParser {
             component: String::from("string"),
             string: Some(String::from(element)),
             field: String::from(field),
-            value: payload.parse().unwrap(),
+            value,
         })
     }
 
     fn map_inverter(msg: &Message, section: &str, field: &str, timestamp: i64) -> Option<Data> {
+        let value = match msg.payload_str().parse() {
+            Ok(value) => value,
+            Err(error) => {
+                warn!(
+                    "OpenDTU: cannot parse {} inverter {} value {:?}: {}",
+                    section,
+                    field,
+                    msg.payload_str(),
+                    error
+                );
+                return None;
+            }
+        };
         debug!(
             "OpenDTU {} inverter: {:}: {:?}",
             section,
@@ -169,17 +209,61 @@ impl OpenDTUParser {
             device: String::from(section),
             component: String::from("inverter"),
             field: String::from(field),
-            value: msg.payload_str().parse().unwrap(),
+            value,
             string: None,
         })
     }
 }
 
+pub fn create_logger(targets: Vec<Target>) -> Result<LoggerResult> {
+    let (txs, handles) = create_targets(targets)?;
+
+    Ok((Arc::new(Mutex::new(OpenDTULogger::new(txs))), handles))
+}
+
 #[cfg(test)]
 mod tests {
     use paho_mqtt::QOS_1;
+    use std::sync::mpsc::sync_channel;
 
     use super::*;
+
+    #[test]
+    fn test_check_message_non_numeric_payload_does_not_panic() {
+        let (tx, rx) = sync_channel(100);
+        let mut logger = OpenDTULogger::new(vec![tx]);
+
+        // Prime the cached timestamp.
+        logger.check_message(&Message::new(
+            "solar/114190641177/status/last_update",
+            "1701271852",
+            QOS_1,
+        ));
+        // A non-numeric value must be skipped, not panic.
+        logger.check_message(&Message::new(
+            "solar/114190641177/0/powerdc",
+            "not-a-number",
+            QOS_1,
+        ));
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_check_message_invalid_timestamp_does_not_panic() {
+        let (tx, rx) = sync_channel(100);
+        let mut logger = OpenDTULogger::new(vec![tx]);
+
+        // A timestamp far outside chrono's range must be rejected, not panic.
+        logger.check_message(&Message::new(
+            "solar/114190641177/status/last_update",
+            "999999999999999999",
+            QOS_1,
+        ));
+        logger.check_message(&Message::new("solar/114190641177/0/powerdc", "0.6", QOS_1));
+
+        assert!(rx.try_recv().is_err());
+    }
 
     #[test]
     fn test_parse_timestamp_returns_none() -> Result<()> {
@@ -246,12 +330,4 @@ mod tests {
 
         Ok(())
     }
-}
-
-pub fn create_logger(
-    targets: Vec<Target>,
-) -> Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
-    let (txs, handles) = create_targets(targets)?;
-
-    Ok((Arc::new(Mutex::new(OpenDTULogger::new(txs))), handles))
 }

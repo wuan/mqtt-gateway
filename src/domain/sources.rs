@@ -3,7 +3,8 @@ use crate::data::{debug, klimalogger, opendtu, openmqttgateway, shelly, CheckMes
 #[cfg(test)]
 use crate::domain::MockMqttClient;
 use crate::domain::MqttClient;
-use log::{info, trace, warn};
+use anyhow::Context;
+use log::{error, info, trace, warn};
 use paho_mqtt::{Message, ServerResponse, QOS_1};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -17,7 +18,7 @@ pub(crate) struct Sources {
 }
 
 impl Sources {
-    pub(crate) fn new(sources: Vec<Source>) -> Self {
+    pub(crate) fn new(sources: Vec<Source>) -> anyhow::Result<Self> {
         let mut handler_map: HashMap<String, Arc<Mutex<dyn CheckMessage>>> = HashMap::new();
         let mut handles: Vec<JoinHandle<()>> = Vec::new();
         let mut topics: Vec<String> = Vec::new();
@@ -26,12 +27,20 @@ impl Sources {
         for source in sources {
             let targets = source.targets.unwrap_or_default();
             let (logger, mut source_handles) = match source.source_type {
-                SourceType::Shelly => shelly::create_logger(targets).unwrap(),
-                SourceType::Sensor => klimalogger::create_logger(targets).unwrap(),
-                SourceType::OpenDTU => opendtu::create_logger(targets).unwrap(),
-                SourceType::OpenMqttGateway => openmqttgateway::create_logger(targets).unwrap(),
-                SourceType::Debug => debug::create_logger(targets).unwrap(),
-            };
+                SourceType::Shelly => shelly::create_logger(targets),
+                SourceType::Sensor => klimalogger::create_logger(targets),
+                SourceType::OpenDTU => opendtu::create_logger(targets),
+                SourceType::OpenMqttGateway => openmqttgateway::create_logger(targets),
+                SourceType::Debug => debug::create_logger(targets),
+            }
+            .with_context(|| format!("Failed to create logger for source '{}'", source.name))?;
+
+            if handler_map.contains_key(&source.prefix) {
+                warn!(
+                    "duplicate source prefix '{}' - the later source overrides the earlier one",
+                    source.prefix
+                );
+            }
             handler_map.insert(source.prefix.clone(), logger);
             handles.append(&mut source_handles);
 
@@ -39,31 +48,33 @@ impl Sources {
             qoss.push(QOS_1);
         }
 
-        Self {
+        Ok(Self {
             handler_map,
             handles,
             topics,
             qoss,
-        }
+        })
     }
 
-    pub(crate) fn subscribe(
-        &self,
-        mqtt_client: &Box<dyn MqttClient>,
-    ) -> anyhow::Result<ServerResponse> {
-        info!("Subscribing to topics: {:?}", &self.topics);
-        mqtt_client
-            .subscribe_many(&self.topics, &self.qoss)
-            .map_err(anyhow::Error::from)
+    pub(crate) fn subscribe(&self, mqtt_client: &dyn MqttClient) -> anyhow::Result<ServerResponse> {
+        info!("Subscribing to topics: {:?}", self.topics);
+        mqtt_client.subscribe_many(&self.topics, &self.qoss)
     }
 
     pub(crate) fn handle(&self, msg: Message) {
-        let prefix = msg.topic().split("/").next().unwrap();
+        let prefix = msg.topic().split('/').next().unwrap_or_default();
         trace!("received from {} - {}", msg.topic(), msg.payload_str());
 
         let handler = self.get_handler(prefix);
         if let Some(handler) = handler {
-            handler.lock().unwrap().check_message(&msg);
+            match handler.lock() {
+                Ok(mut handler) => handler.check_message(&msg),
+                Err(_) => error!(
+                    "handler for prefix '{}' is poisoned, dropping message on '{}'",
+                    prefix,
+                    msg.topic()
+                ),
+            }
         } else {
             warn!("unhandled prefix {} from topic {}", prefix, msg.topic());
         }
@@ -75,7 +86,9 @@ impl Sources {
 
     pub(crate) fn shutdown(self) {
         for handle in self.handles {
-            handle.join().expect("failed to join influx writer thread");
+            if handle.join().is_err() {
+                error!("target writer thread panicked during shutdown");
+            }
         }
     }
 }
@@ -105,7 +118,8 @@ pub(crate) mod tests {
             .times(1)
             .returning(|_, _| Ok(ServerResponse::new()));
 
-        let result = sources.subscribe(&(mock_client as Box<dyn MqttClient>));
+        let client: &dyn MqttClient = mock_client.as_ref();
+        let result = sources.subscribe(client);
 
         assert!(result.is_ok());
     }
@@ -133,6 +147,6 @@ pub(crate) mod tests {
             targets: None,
         }];
 
-        Sources::new(sources)
+        Sources::new(sources).expect("failed to create sources")
     }
 }

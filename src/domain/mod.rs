@@ -11,11 +11,7 @@ pub(crate) mod sources;
 #[cfg_attr(test, automock)]
 pub(crate) trait MqttClient {
     fn connect(&self) -> anyhow::Result<ServerResponse>;
-    fn subscribe_many(
-        &self,
-        topics: &Vec<String>,
-        qoss: &Vec<i32>,
-    ) -> anyhow::Result<ServerResponse>;
+    fn subscribe_many(&self, topics: &[String], qoss: &[i32]) -> anyhow::Result<ServerResponse>;
     fn create(&mut self) -> anyhow::Result<Box<dyn Stream>>;
     fn reconnect(&self) -> anyhow::Result<ServerResponse>;
 }
@@ -42,11 +38,7 @@ impl MqttClient for MqttClientDefault {
             .map_err(anyhow::Error::from)
     }
 
-    fn subscribe_many(
-        &self,
-        topics: &Vec<String>,
-        qoss: &Vec<i32>,
-    ) -> anyhow::Result<ServerResponse> {
+    fn subscribe_many(&self, topics: &[String], qoss: &[i32]) -> anyhow::Result<ServerResponse> {
         self.mqtt_client
             .subscribe_many(topics, qoss)
             .map_err(anyhow::Error::from)
@@ -111,7 +103,7 @@ mod tests {
         let qoss_clone = qoss.clone();
 
         mock.expect_subscribe_many()
-            .withf(move |t, q| t == &topics_clone && q == &qoss_clone)
+            .withf(move |t, q| t == topics_clone && q == qoss_clone)
             .times(1)
             .returning(|_, _| Ok(ServerResponse::new()));
 
@@ -149,9 +141,7 @@ mod tests {
     fn test_mock_stream_next_none() {
         let mut mock = MockStream::new();
 
-        mock.expect_next()
-            .times(1)
-            .returning(|| Ok(None));
+        mock.expect_next().times(1).returning(|| Ok(None));
 
         let result = mock.next();
         assert!(result.is_ok());

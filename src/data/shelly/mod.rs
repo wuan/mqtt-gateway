@@ -1,7 +1,7 @@
 mod data;
 
 use crate::config::Target;
-use crate::data::{shelly, CheckMessage, LogEvent};
+use crate::data::{send_event, shelly, CheckMessage, LogEvent, LoggerResult};
 use crate::target::create_targets;
 use crate::Number;
 use anyhow::Result;
@@ -13,7 +13,6 @@ use serde::Deserialize;
 use std::fmt::Debug;
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, LazyLock, Mutex};
-use std::thread::JoinHandle;
 
 pub trait Timestamped {
     fn timestamp(&self) -> Option<i64>;
@@ -133,7 +132,7 @@ impl CheckMessage for ShellyLogger {
 
 fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenamed>(
     msg: &'a Message,
-    txs: &Vec<SyncSender<LogEvent>>,
+    txs: &[SyncSender<LogEvent>],
     fields: &[(&str, WriteTypeMapper<T>, &str)],
 ) {
     let location = msg.topic().split("/").nth(1).unwrap();
@@ -158,13 +157,12 @@ fn handle_message<'a, T: Deserialize<'a> + Clone + Debug + Timestamped + Typenam
                 msg.payload_str(),
                 msg.topic()
             );
-            return;
         }
     }
 }
 
 fn convert_measurements<T: Clone + Debug + Timestamped + Typenamed>(
-    txs: &Vec<SyncSender<LogEvent>>,
+    txs: &[SyncSender<LogEvent>],
     fields: &[(&str, WriteTypeMapper<T>, &str)],
     location: &str,
     channel: &str,
@@ -173,18 +171,16 @@ fn convert_measurements<T: Clone + Debug + Timestamped + Typenamed>(
 ) {
     for (measurement, value, unit) in fields {
         if let Some(result) = value(data) {
-            for tx in txs {
-                tx.send(create_event(
-                    location,
-                    channel,
-                    data,
-                    minute_ts,
-                    measurement,
-                    unit,
-                    result,
-                ))
-                .expect("failed to send");
-            }
+            let event = create_event(
+                location,
+                channel,
+                data,
+                minute_ts,
+                measurement,
+                unit,
+                result,
+            );
+            send_event(txs, &event);
         }
     }
 }
@@ -211,6 +207,12 @@ fn create_event<T: Clone + Debug + Timestamped + Typenamed>(
         tags.into_iter().collect(),
         result,
     )
+}
+
+pub fn create_logger(targets: Vec<Target>) -> Result<LoggerResult> {
+    let (txs, handles) = create_targets(targets)?;
+
+    Ok((Arc::new(Mutex::new(ShellyLogger::new(txs))), handles))
 }
 
 #[cfg(test)]
@@ -332,8 +334,7 @@ mod tests {
         Ok(())
     }
 
-    const COVER_PAYLOAD: &'static str =
-        "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\
+    const COVER_PAYLOAD: &str = "{\"id\":0, \"source\":\"limit_switch\", \"state\":\"open\",\
                 \"apower\":0.0,\"voltage\":231.7,\"current\":0.500,\"pf\":0.00,\"freq\":50.0,\
                 \"aenergy\":{\"total\":3.143,\"by_minute\":[0.000,0.000,97.712],\
                 \"minute_ts\":1703414519},\"temperature\":{\"tC\":30.7, \"tF\":87.3},\
@@ -465,7 +466,7 @@ mod tests {
         let message = Message::new("shellies/loo-fan/status/switch:0", "{\"id\":0, \"source\":\"timer\", \"output\":false, \"apower\":0.0, \"voltage\":226.5, \"current\":3.1, \"aenergy\":{\"total\":1094.865,\"by_minute\":[0.000,0.000,0.000],\"minute_ts\":1703415907},\"temperature\":{\"tC\":36.4, \"tF\":97.5}}", QOS_1);
         let result: SwitchData = parse(&message)?;
 
-        assert_eq!(result.output, false);
+        assert!(!result.output);
         assert_eq!(result.power, Some(0.0));
         assert_eq!(result.voltage, Some(226.5));
         assert_eq!(result.current, Some(3.1));
@@ -528,12 +529,4 @@ mod tests {
 
         Ok(())
     }
-}
-
-pub fn create_logger(
-    targets: Vec<Target>,
-) -> Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
-    let (txs, handles) = create_targets(targets)?;
-
-    Ok((Arc::new(Mutex::new(ShellyLogger::new(txs))), handles))
 }

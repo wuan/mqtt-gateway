@@ -1,10 +1,9 @@
 use crate::config::Target;
-use crate::data::CheckMessage;
+use crate::data::{CheckMessage, LoggerResult};
 use log::{info, warn};
 use paho_mqtt::Message;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
 
 pub struct DebugLogger {
     checked_count: AtomicU64,
@@ -37,11 +36,9 @@ impl CheckMessage for DebugLogger {
     fn drop_all(&mut self) {}
 }
 
-pub fn create_logger(
-    targets: Vec<Target>,
-) -> anyhow::Result<(Arc<Mutex<dyn CheckMessage>>, Vec<JoinHandle<()>>)> {
-    if targets.len() > 0 {
-        warn!("debug type has targets defined: {:?}", &targets);
+pub fn create_logger(targets: Vec<Target>) -> anyhow::Result<LoggerResult> {
+    if !targets.is_empty() {
+        warn!("debug type has targets defined: {:?}", targets);
     }
 
     Ok((Arc::new(Mutex::new(DebugLogger::new())), Vec::new()))

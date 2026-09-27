@@ -30,15 +30,13 @@ fn debug_writer<T: Debug>(rx: Receiver<T>) {
         let result = rx.recv_timeout(std::time::Duration::from_secs(1));
         let data = match result {
             Ok(query) => query,
-            Err(error) => {
-                match error {
-                    std::sync::mpsc::RecvTimeoutError::Timeout => continue,
-                    std::sync::mpsc::RecvTimeoutError::Disconnected => {
-                        warn!("Debug: channel disconnected");
-                        break;
-                    }
+            Err(error) => match error {
+                std::sync::mpsc::RecvTimeoutError::Timeout => continue,
+                std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                    warn!("Debug: channel disconnected");
+                    break;
                 }
-            }
+            },
         };
         info!("query: {:?}", data);
     }

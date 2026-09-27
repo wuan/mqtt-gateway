@@ -66,13 +66,17 @@ fn main() -> anyhow::Result<()> {
     let config: config::Config = serde_yaml_ng::from_str(&config_string)
         .with_context(|| format!("Failed to parse config file: {}", config_file_path))?;
 
-    debug!("config: {:?}", config);
+    debug!(
+        "Loaded config with {} source(s), MQTT url '{}'",
+        config.sources.len(),
+        config.mqtt_url
+    );
 
     let mqtt_client = source::mqtt::create_mqtt_client(&config.mqtt_url, &config.mqtt_client_id)?;
 
     let receiver = Receiver::new(
         Box::new(MqttClientDefault::new(mqtt_client)),
-        Sources::new(config.sources),
+        Sources::new(config.sources)?,
     );
     receiver.listen()?;
 
@@ -108,18 +112,20 @@ fn determine_config_file_path() -> anyhow::Result<String> {
         let path = Path::new(config_location);
         let tmp_config_file_path = path.join(Path::new(config_file_name));
         if tmp_config_file_path.exists() && tmp_config_file_path.is_file() {
-            return Ok(String::from(
-                tmp_config_file_path.to_str().ok_or_else(|| {
+            return Ok(String::from(tmp_config_file_path.to_str().ok_or_else(
+                || {
                     anyhow::anyhow!(
                         "Invalid config file path: {}",
                         tmp_config_file_path.display()
                     )
-                })?,
-            ));
+                },
+            )?));
         }
     }
 
-    Err(anyhow::anyhow!("No configuration file found in ./ or ./config/"))
+    Err(anyhow::anyhow!(
+        "No configuration file found in ./ or ./config/"
+    ))
 }
 
 #[cfg(test)]
@@ -135,7 +141,7 @@ mod tests {
         // Change to a directory that doesn't have config.yml
         let temp_dir = tempdir().unwrap();
         let current_dir = std::env::current_dir().unwrap();
-        
+
         // Set current dir to temp dir - this should not have config.yml
         std::env::set_current_dir(temp_dir.path()).expect("failed to set current dir");
 

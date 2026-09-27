@@ -1,7 +1,7 @@
-use anyhow::Context;
 use crate::data::LogEvent;
 use crate::is_shutdown_requested;
 use crate::Number;
+use anyhow::Context;
 use async_compat::Compat;
 use influxdb::{Client, Timestamp, WriteQuery};
 use log::{info, trace, warn};
@@ -72,15 +72,24 @@ fn create_influxdb_client(influx_config: &InfluxConfig) -> anyhow::Result<Box<dy
     let mut influx_client = Client::new(influx_config.url.clone(), influx_config.database.clone());
 
     influx_client = if let Some(token) = influx_config.token.clone() {
-        info!("InfluxDB: {} {} set token", &influx_config.url, &influx_config.database);
+        info!(
+            "InfluxDB: {} {} set token",
+            influx_config.url, influx_config.database
+        );
         influx_client.with_token(token)
     } else if let (Some(user), Some(password)) =
         (influx_config.user.clone(), influx_config.password.clone())
     {
-        info!("InfluxDB: {} {} set username {} and password", &influx_config.url, &influx_config.database, &user);
+        info!(
+            "InfluxDB: {} {} set username {} and password",
+            influx_config.url, influx_config.database, user
+        );
         influx_client.with_auth(user, password)
     } else {
-        info!("InfluxDB: {} {} no authentication", &influx_config.url, &influx_config.database);
+        info!(
+            "InfluxDB: {} {} no authentication",
+            influx_config.url, influx_config.database
+        );
         influx_client
     };
 
@@ -92,11 +101,28 @@ fn influxdb_writer(
     influx_client: Box<dyn InfluxClient>,
     influx_config: InfluxConfig,
 ) {
-    let mut writer = Writer::new(influx_client, influx_config.clone(), Duration::from_secs(15));
+    let mut writer = Writer::new(
+        influx_client,
+        influx_config.clone(),
+        Duration::from_secs(15),
+    );
 
     loop {
         // Use shorter timeout to check shutdown flag more frequently
-        let result = rx.recv_timeout(Duration::from_secs(1));
+        match rx.recv_timeout(Duration::from_secs(1)) {
+            // Process the event before reacting to a shutdown request so it is
+            // not silently dropped.
+            Ok(event) => writer.queue(map_to_query(event)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                writer.flush();
+                warn!(
+                    "InfluxDB: disconnected {} {}",
+                    influx_config.url, influx_config.database,
+                );
+                break;
+            }
+        }
 
         // Check for shutdown request periodically
         if is_shutdown_requested() {
@@ -107,25 +133,6 @@ fn influxdb_writer(
             );
             break;
         }
-
-        let query = match result {
-            Ok(event) => map_to_query(event),
-            Err(error) => {
-                writer.flush();
-                match error {
-                    std::sync::mpsc::RecvTimeoutError::Timeout => continue,
-                    std::sync::mpsc::RecvTimeoutError::Disconnected => {
-                        warn!(
-                            "InfluxDB: disconnected {} {}",
-                            influx_config.url, influx_config.database,
-                        );
-                        break;
-                    }
-                }
-            }
-        };
-
-        writer.queue(query);
     }
 
     info!(
@@ -152,7 +159,7 @@ impl Writer {
             self.start.elapsed().as_millis(),
             self.start.elapsed() >= self.accumulation_time
         );
-        if self.queries.len() > 0 && self.start.elapsed() >= self.accumulation_time {
+        if self.start.elapsed() >= self.accumulation_time {
             self.flush();
         }
     }
@@ -163,9 +170,10 @@ impl Writer {
         }
 
         let now = Instant::now();
-        let query_count = self.queries.len();
+        let queries = std::mem::take(&mut self.queries);
+        let query_count = queries.len();
         trace!("before write to influx");
-        let result = self.influx_client.write(self.queries.clone());
+        let result = self.influx_client.write(queries);
         let duration = now.elapsed();
         info!(
             "InfluxDB: {} {} write #{} ({:.3} s)",
@@ -179,11 +187,12 @@ impl Writer {
             Err(error) => {
                 log::error!(
                     "#### Error writing to influx: {} {}: {:?}",
-                    self.influx_config.url, self.influx_config.database, error
+                    self.influx_config.url,
+                    self.influx_config.database,
+                    error
                 );
             }
         }
-        self.queries.clear();
         self.start = now
     }
 }
@@ -207,8 +216,8 @@ impl Writer {
 pub fn spawn_influxdb_writer(
     influx_config: InfluxConfig,
 ) -> anyhow::Result<(SyncSender<LogEvent>, JoinHandle<()>)> {
-    let influx_client = create_influxdb_client(&influx_config)
-        .context("Failed to create InfluxDB client")?;
+    let influx_client =
+        create_influxdb_client(&influx_config).context("Failed to create InfluxDB client")?;
 
     Ok(spawn_writer(influx_client, influx_config))
 }
@@ -224,7 +233,7 @@ fn spawn_writer(
         thread::spawn(move || {
             info!(
                 "InfluxDB: starting writer {} {}",
-                &influx_config.url, &influx_config.database
+                influx_config.url, influx_config.database
             );
 
             influxdb_writer(rx, influx_client, influx_config);
