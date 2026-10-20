@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::mpsc::SyncSender;
 
 use crate::config::Target;
@@ -99,12 +100,15 @@ impl CheckMessage for OpenDTULogger {
 }
 
 struct OpenDTUParser {
-    timestamp: Option<i64>,
+    /// Last observed `status/last_update` timestamp per device section.
+    timestamps: HashMap<String, i64>,
 }
 
 impl OpenDTUParser {
     pub fn new() -> Self {
-        OpenDTUParser { timestamp: None }
+        OpenDTUParser {
+            timestamps: HashMap::new(),
+        }
     }
 
     fn parse(&mut self, msg: &Message) -> Result<Option<Data>> {
@@ -119,8 +123,8 @@ impl OpenDTUParser {
             if let Some(field) = field {
                 match element {
                     "0" => {
-                        if let Some(timestamp) = self.timestamp {
-                            data = Self::map_inverter(msg, section, field, timestamp);
+                        if let Some(timestamp) = self.timestamps.get(section) {
+                            data = Self::map_inverter(msg, section, field, *timestamp);
                         }
                     }
                     "device" => {
@@ -129,7 +133,8 @@ impl OpenDTUParser {
                     }
                     "status" => {
                         if field == "last_update" {
-                            self.timestamp = Some(msg.payload_str().parse::<i64>()?);
+                            self.timestamps
+                                .insert(section.to_string(), msg.payload_str().parse::<i64>()?);
                         } else {
                             // ignore other status data
                             trace!("  status: {:}: {:?}", field, msg.payload_str());
@@ -138,9 +143,9 @@ impl OpenDTUParser {
                     _ => {
                         let payload = msg.payload_str();
                         if !payload.is_empty() {
-                            if let Some(timestamp) = self.timestamp {
+                            if let Some(timestamp) = self.timestamps.get(section) {
                                 data =
-                                    Self::map_string(section, element, field, payload, timestamp);
+                                    Self::map_string(section, element, field, payload, *timestamp);
                             }
                         }
                     }
@@ -312,6 +317,139 @@ mod tests {
         assert_eq!(result.value, 14.1);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_parse_keeps_independent_timestamps_per_section() -> Result<()> {
+        let mut parser = OpenDTUParser::new();
+        parser.parse(&Message::new(
+            "solar/114190641177/status/last_update",
+            "1701271852",
+            QOS_1,
+        ))?;
+        parser.parse(&Message::new(
+            "solar/114190641178/status/last_update",
+            "1701300000",
+            QOS_1,
+        ))?;
+
+        assert_eq!(parser.timestamps.get("114190641177"), Some(&1701271852));
+        assert_eq!(parser.timestamps.get("114190641178"), Some(&1701300000));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_inverter_uses_own_section_timestamp() -> Result<()> {
+        let mut parser = OpenDTUParser::new();
+        parser.parse(&Message::new(
+            "solar/114190641177/status/last_update",
+            "1701271852",
+            QOS_1,
+        ))?;
+        parser.parse(&Message::new(
+            "solar/114190641178/status/last_update",
+            "1701300000",
+            QOS_1,
+        ))?;
+
+        // The reading for device A must keep A's timestamp even though B
+        // published a different one afterwards.
+        let result_a = parser
+            .parse(&Message::new("solar/114190641177/0/powerdc", "0.6", QOS_1))?
+            .unwrap();
+        assert_eq!(result_a.timestamp, 1701271852);
+        assert_eq!(result_a.device, "114190641177");
+
+        let result_b = parser
+            .parse(&Message::new("solar/114190641178/0/powerdc", "0.7", QOS_1))?
+            .unwrap();
+        assert_eq!(result_b.timestamp, 1701300000);
+        assert_eq!(result_b.device, "114190641178");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_string_uses_own_section_timestamp() -> Result<()> {
+        let mut parser = OpenDTUParser::new();
+        parser.parse(&Message::new(
+            "solar/114190641177/status/last_update",
+            "1701271852",
+            QOS_1,
+        ))?;
+        parser.parse(&Message::new(
+            "solar/114190641178/status/last_update",
+            "1701300000",
+            QOS_1,
+        ))?;
+
+        let result = parser
+            .parse(&Message::new("solar/114190641178/1/voltage", "14.1", QOS_1))?
+            .unwrap();
+
+        assert_eq!(result.timestamp, 1701300000);
+        assert_eq!(result.field, "voltage");
+        assert_eq!(result.device, "114190641178");
+        assert_eq!(result.component, "string");
+        assert_eq!(result.string.unwrap(), "1");
+        assert_eq!(result.value, 14.1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_reading_without_timestamp_is_dropped() -> Result<()> {
+        let mut parser = OpenDTUParser::new();
+        // Only device A is primed; device B has no known timestamp.
+        parser.parse(&Message::new(
+            "solar/114190641177/status/last_update",
+            "1701271852",
+            QOS_1,
+        ))?;
+
+        assert!(parser
+            .parse(&Message::new("solar/114190641178/0/powerdc", "0.6", QOS_1))?
+            .is_none());
+        assert!(parser
+            .parse(&Message::new("solar/114190641178/1/voltage", "14.1", QOS_1))?
+            .is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_message_stamps_each_device_with_its_own_timestamp() {
+        let (tx, rx) = sync_channel(100);
+        let mut logger = OpenDTULogger::new(vec![tx]);
+
+        logger.check_message(&Message::new(
+            "solar/114190641177/status/last_update",
+            "1701271852",
+            QOS_1,
+        ));
+        logger.check_message(&Message::new(
+            "solar/114190641178/status/last_update",
+            "1701300000",
+            QOS_1,
+        ));
+
+        logger.check_message(&Message::new("solar/114190641177/0/powerdc", "0.6", QOS_1));
+        logger.check_message(&Message::new("solar/114190641178/0/powerdc", "0.7", QOS_1));
+
+        let event_a = rx.try_recv().expect("event for device A");
+        let event_b = rx.try_recv().expect("event for device B");
+
+        assert_eq!(event_a.timestamp, 1701271852);
+        assert_eq!(
+            event_a.tags.get("device"),
+            Some(&"114190641177".to_string())
+        );
+        assert_eq!(event_b.timestamp, 1701300000);
+        assert_eq!(
+            event_b.tags.get("device"),
+            Some(&"114190641178".to_string())
+        );
     }
 
     #[test]
