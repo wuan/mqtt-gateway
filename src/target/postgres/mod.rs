@@ -6,7 +6,7 @@ use log::{error, info, warn};
 use mockall::automock;
 use postgres::types::ToSql;
 use postgres::Client;
-use postgres::{Error, NoTls};
+use postgres::NoTls;
 use std::collections::HashMap;
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
@@ -54,13 +54,47 @@ impl PostgresConfig {
     }
 }
 
+/// Why a database write failed, from the writer's point of view.
+#[derive(Debug)]
+pub(crate) enum WriteError {
+    /// The connection is unusable; reconnecting may let the write succeed.
+    Connection(String),
+    /// The server rejected the statement; reconnecting cannot help.
+    Statement(String),
+}
+
+impl std::fmt::Display for WriteError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WriteError::Connection(message) => write!(formatter, "connection error: {message}"),
+            WriteError::Statement(message) => write!(formatter, "statement error: {message}"),
+        }
+    }
+}
+
+/// Classify a failed write from the connection state and the server's SQLSTATE.
+///
+/// A closed connection, a failure without a SQLSTATE (transport or encoding),
+/// or a connection-exception (`08`) or shutdown (`57P0x`) SQLSTATE leaves the
+/// connection unusable. Every other server error is a statement failure that
+/// reconnecting cannot fix.
+fn classify(is_closed: bool, sqlstate: Option<&str>, message: String) -> WriteError {
+    let connection_lost =
+        is_closed || sqlstate.is_none_or(|code| code.starts_with("08") || code.starts_with("57P0"));
+    if connection_lost {
+        WriteError::Connection(message)
+    } else {
+        WriteError::Statement(message)
+    }
+}
+
 #[cfg_attr(test, automock)]
 pub trait PostgresClient: Send {
     fn execute<'a>(
         &mut self,
         query: &str,
         params: &'a [&'a (dyn ToSql + Sync)],
-    ) -> Result<u64, Error>;
+    ) -> Result<u64, WriteError>;
 }
 
 struct DefaultPostgresClient {
@@ -76,8 +110,14 @@ impl DefaultPostgresClient {
 impl DefaultPostgresClient {}
 
 impl PostgresClient for DefaultPostgresClient {
-    fn execute(&mut self, query: &str, params: &[&(dyn ToSql + Sync)]) -> Result<u64, Error> {
-        self.client.execute(query, params)
+    fn execute(&mut self, query: &str, params: &[&(dyn ToSql + Sync)]) -> Result<u64, WriteError> {
+        self.client.execute(query, params).map_err(|error| {
+            classify(
+                error.is_closed(),
+                error.code().map(|code| code.code()),
+                error.to_string(),
+            )
+        })
     }
 }
 /// Only allow plain identifiers as table names. The measurement is derived from
@@ -155,6 +195,29 @@ fn row_from_event(event: &LogEvent) -> Option<Row> {
         sensor,
         value,
     })
+}
+
+/// Build a multi-row `INSERT` statement with `count` parameter tuples.
+fn insert_statement(measurement: &str, count: usize) -> String {
+    let mut statement = format!(
+        "insert into \"{}\" (time, location, sensor, value) values",
+        measurement
+    );
+    for index in 0..count {
+        if index > 0 {
+            statement.push(',');
+        }
+        let base = index * 4;
+        statement.push_str(&format!(
+            " (${}, ${}, ${}, ${})",
+            base + 1,
+            base + 2,
+            base + 3,
+            base + 4
+        ));
+    }
+    statement.push(';');
+    statement
 }
 
 struct PostgresWriter {
@@ -238,24 +301,7 @@ impl PostgresWriter {
 
     /// Write one measurement's rows with a single multi-row `INSERT`.
     fn write_group(&mut self, measurement: &str, rows: &[&Row]) {
-        let mut statement = format!(
-            "insert into \"{}\" (time, location, sensor, value) values",
-            measurement
-        );
-        for index in 0..rows.len() {
-            if index > 0 {
-                statement.push(',');
-            }
-            let base = index * 4;
-            statement.push_str(&format!(
-                " (${}, ${}, ${}, ${})",
-                base + 1,
-                base + 2,
-                base + 3,
-                base + 4
-            ));
-        }
-        statement.push(';');
+        let statement = insert_statement(measurement, rows.len());
 
         // Owned storage so the borrowed parameter slice stays valid.
         let times: Vec<i64> = rows.iter().map(|row| row.time).collect();
@@ -270,28 +316,54 @@ impl PostgresWriter {
             params.push(&values[index]);
         }
 
-        if let Err(error) = self.client.execute(&statement, &params) {
-            error!(
-                "#### Error writing to postgres: {} {:?}",
-                measurement, error
-            );
+        match self.client.execute(&statement, &params) {
+            Ok(_) => {}
+            Err(error @ WriteError::Connection(_)) => {
+                log_write_error(measurement, &error);
 
-            // The connection may be broken; try to reconnect once and retry.
-            match (self.reconnect)() {
-                Ok(mut new_client) => {
-                    match new_client.execute(&statement, &params) {
-                        Ok(_) => {
-                            info!("PostgreSQL: reconnected and retried '{}'", measurement)
-                        }
-                        Err(error) => {
-                            report_write_failure(measurement, &error);
+                // The connection may be broken; reconnect once and retry.
+                match (self.reconnect)() {
+                    Ok(mut new_client) => {
+                        let retry = new_client.execute(&statement, &params);
+                        self.client = new_client;
+                        match retry {
+                            Ok(_) => {
+                                info!("PostgreSQL: reconnected and retried '{}'", measurement)
+                            }
+                            Err(error @ WriteError::Statement(_)) => {
+                                log_write_error(measurement, &error);
+                                self.isolate_rows(measurement, rows, &error);
+                            }
+                            Err(error) => report_write_failure(measurement, &error),
                         }
                     }
-                    self.client = new_client;
+                    Err(error) => report_write_failure(measurement, &error),
                 }
-                Err(error) => {
-                    report_write_failure(measurement, &error);
-                }
+            }
+            Err(error @ WriteError::Statement(_)) => {
+                log_write_error(measurement, &error);
+                self.isolate_rows(measurement, rows, &error);
+            }
+        }
+    }
+
+    /// Write a group's rows one at a time so a row the server rejects cannot
+    /// discard the rows that remain. Every row that cannot be written is
+    /// reported and dropped.
+    fn isolate_rows(&mut self, measurement: &str, rows: &[&Row], group_error: &WriteError) {
+        warn!(
+            "PostgreSQL: group write to '{}' failed ({}); isolating {} row(s)",
+            measurement,
+            group_error,
+            rows.len()
+        );
+        let statement = insert_statement(measurement, 1);
+        for row in rows {
+            let location = row.location.as_str();
+            let sensor = row.sensor.as_str();
+            let params: [&(dyn ToSql + Sync); 4] = [&row.time, &location, &sensor, &row.value];
+            if let Err(error) = self.client.execute(&statement, &params) {
+                report_write_failure(measurement, &error);
             }
         }
     }
@@ -323,6 +395,10 @@ impl PostgresWriter {
         }
         self.flush();
     }
+}
+
+fn log_write_error(measurement: &str, error: &dyn std::fmt::Display) {
+    error!("#### Error writing to postgres: {} {}", measurement, error);
 }
 
 fn report_write_failure(measurement: &str, error: &dyn std::fmt::Display) {
@@ -402,9 +478,20 @@ pub(crate) fn spawn_postgres_writer_internal(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn unreachable_reconnect() -> ReconnectClient {
         Box::new(|| Err(anyhow::anyhow!("reconnect not expected in test")))
+    }
+
+    fn test_row(time: i64, location: &str) -> Row {
+        Row {
+            measurement: "t".to_string(),
+            time,
+            location: location.to_string(),
+            sensor: "s".to_string(),
+            value: 1.0,
+        }
     }
 
     fn test_event(value: f64) -> LogEvent {
@@ -602,5 +689,163 @@ mod tests {
         let _ = join_handle.join();
 
         Ok(())
+    }
+
+    #[test]
+    fn test_classify_closed_and_missing_sqlstate_are_connection_errors() {
+        // A closed connection is a connection failure even with a server code.
+        assert!(matches!(
+            classify(true, Some("23505"), "closed".to_string()),
+            WriteError::Connection(_)
+        ));
+        // A transport failure carries no SQLSTATE.
+        assert!(matches!(
+            classify(false, None, "transport".to_string()),
+            WriteError::Connection(_)
+        ));
+    }
+
+    #[test]
+    fn test_classify_connection_and_shutdown_sqlstates_are_connection_errors() {
+        for code in ["08000", "08003", "08006", "57P01", "57P02", "57P03"] {
+            assert!(
+                matches!(
+                    classify(false, Some(code), code.to_string()),
+                    WriteError::Connection(_)
+                ),
+                "SQLSTATE {code} should be a connection error"
+            );
+        }
+    }
+
+    #[test]
+    fn test_classify_statement_sqlstates_are_statement_errors() {
+        // Constraint violations and other server errors cannot be fixed by a
+        // reconnect - including class 57 codes that are not shutdown.
+        for code in ["23505", "42P01", "57014", "40001"] {
+            assert!(
+                matches!(
+                    classify(false, Some(code), code.to_string()),
+                    WriteError::Statement(_)
+                ),
+                "SQLSTATE {code} should be a statement error"
+            );
+        }
+    }
+
+    #[test]
+    fn test_write_group_statement_error_isolates_conflicting_row_without_reconnecting() {
+        let reconnects = Arc::new(AtomicUsize::new(0));
+        let reconnect_counter = Arc::clone(&reconnects);
+        let reconnect: ReconnectClient = Box::new(move || {
+            reconnect_counter.fetch_add(1, Ordering::SeqCst);
+            Err(anyhow::anyhow!("a statement error must not reconnect"))
+        });
+
+        let mut mock = MockPostgresClient::new();
+        // The three-row insert fails as a whole ...
+        mock.expect_execute()
+            .withf(|_, params| params.len() == 12)
+            .times(1)
+            .returning(|_, _| Err(WriteError::Statement("duplicate key".to_string())));
+        // ... so every row is retried on its own; only the row with time 2
+        // still conflicts.
+        mock.expect_execute()
+            .withf(|_, params| params.len() == 4)
+            .times(3)
+            .returning(|_, params| {
+                if format!("{:?}", params[0]) == "2" {
+                    Err(WriteError::Statement("duplicate key".to_string()))
+                } else {
+                    Ok(1)
+                }
+            });
+
+        let mut writer = PostgresWriter::new(Box::new(mock), reconnect, Shutdown::new());
+        writer.pending.push(test_row(1, "a"));
+        writer.pending.push(test_row(2, "b"));
+        writer.pending.push(test_row(3, "c"));
+
+        writer.flush();
+
+        assert_eq!(
+            reconnects.load(Ordering::SeqCst),
+            0,
+            "a statement error must not reconnect"
+        );
+        assert!(writer.pending.is_empty());
+    }
+
+    #[test]
+    fn test_write_group_connection_error_reconnects_once_and_retries() {
+        let reconnects = Arc::new(AtomicUsize::new(0));
+        let reconnect_counter = Arc::clone(&reconnects);
+        let reconnect: ReconnectClient = Box::new(move || {
+            reconnect_counter.fetch_add(1, Ordering::SeqCst);
+            let mut client = MockPostgresClient::new();
+            // The retry reuses the same multi-row statement and succeeds.
+            client
+                .expect_execute()
+                .withf(|_, params| params.len() == 8)
+                .times(1)
+                .returning(|_, _| Ok(2));
+            Ok(Box::new(client))
+        });
+
+        let mut mock = MockPostgresClient::new();
+        mock.expect_execute()
+            .withf(|_, params| params.len() == 8)
+            .times(1)
+            .returning(|_, _| Err(WriteError::Connection("connection closed".to_string())));
+
+        let mut writer = PostgresWriter::new(Box::new(mock), reconnect, Shutdown::new());
+        writer.pending.push(test_row(1, "a"));
+        writer.pending.push(test_row(2, "b"));
+
+        writer.flush();
+
+        assert_eq!(
+            reconnects.load(Ordering::SeqCst),
+            1,
+            "a connection error must reconnect once and retry"
+        );
+        assert!(writer.pending.is_empty());
+    }
+
+    #[test]
+    fn test_write_group_retry_connection_error_drops_and_reports_group() {
+        let before = crate::metrics::total(&crate::metrics::POSTGRES_WRITE_FAILURES);
+
+        let reconnects = Arc::new(AtomicUsize::new(0));
+        let reconnect_counter = Arc::clone(&reconnects);
+        let reconnect: ReconnectClient = Box::new(move || {
+            reconnect_counter.fetch_add(1, Ordering::SeqCst);
+            let mut client = MockPostgresClient::new();
+            // The retry fails again because the connection is still broken;
+            // individual rows must not be attempted against a dead connection.
+            client
+                .expect_execute()
+                .withf(|_, params| params.len() == 8)
+                .times(1)
+                .returning(|_, _| Err(WriteError::Connection("still down".to_string())));
+            Ok(Box::new(client))
+        });
+
+        let mut mock = MockPostgresClient::new();
+        mock.expect_execute()
+            .withf(|_, params| params.len() == 8)
+            .times(1)
+            .returning(|_, _| Err(WriteError::Connection("connection closed".to_string())));
+
+        let mut writer = PostgresWriter::new(Box::new(mock), reconnect, Shutdown::new());
+        writer.pending.push(test_row(1, "a"));
+        writer.pending.push(test_row(2, "b"));
+
+        writer.flush();
+
+        assert_eq!(reconnects.load(Ordering::SeqCst), 1);
+        let after = crate::metrics::total(&crate::metrics::POSTGRES_WRITE_FAILURES);
+        assert!(after > before, "a failed reconnect retry must be reported");
+        assert!(writer.pending.is_empty(), "the group must be dropped");
     }
 }
