@@ -191,9 +191,10 @@ impl PostgresWriter {
             }
             self.pending.push(row);
         }
-        if self.pending.len() >= self.max_size {
-            self.flush();
-        }
+        // Enforce both bounds at enqueue time so a batch is written within
+        // `max_delay` of its first row even while events keep arriving faster
+        // than the receive timeout.
+        self.flush_if_due();
     }
 
     /// Flush a batch once its size or age exceeds the configured limits.
@@ -406,6 +407,17 @@ mod tests {
         Box::new(|| Err(anyhow::anyhow!("reconnect not expected in test")))
     }
 
+    fn test_event(value: f64) -> LogEvent {
+        LogEvent::new_value_from_ref(
+            "measurement".to_string(),
+            0,
+            vec![("location", "location"), ("sensor", "BME680")]
+                .into_iter()
+                .collect(),
+            Number::Float(value),
+        )
+    }
+
     #[test]
     fn test_sanitize_measurement() {
         assert_eq!(sanitize_measurement("powerdc"), Some("powerdc"));
@@ -493,6 +505,64 @@ mod tests {
         });
 
         writer.flush();
+        assert!(writer.pending.is_empty());
+    }
+
+    #[test]
+    fn test_push_flushes_batch_that_exceeds_max_delay_while_traffic_continues() {
+        let mut mock = MockPostgresClient::new();
+        mock.expect_execute().times(1).returning(|_, _| Ok(1));
+
+        let client: Box<dyn PostgresClient> = Box::new(mock);
+        let mut writer = PostgresWriter::new(client, unreachable_reconnect(), Shutdown::new());
+
+        writer.push(&test_event(1.0));
+        assert!(!writer.pending.is_empty());
+
+        // Simulate a batch whose first row has waited past `max_delay` while
+        // further events keep arriving: the next enqueue must flush without the
+        // receive timeout ever firing.
+        writer.first_queued_at = Some(Instant::now() - writer.max_delay);
+        writer.push(&test_event(2.0));
+
+        assert!(writer.pending.is_empty());
+    }
+
+    #[test]
+    fn test_flush_if_due_flushes_quiet_batch_after_max_delay() {
+        let mut mock = MockPostgresClient::new();
+        mock.expect_execute().times(1).returning(|_, _| Ok(1));
+
+        let client: Box<dyn PostgresClient> = Box::new(mock);
+        let mut writer = PostgresWriter::new(client, unreachable_reconnect(), Shutdown::new());
+
+        writer.push(&test_event(1.0));
+        assert!(!writer.pending.is_empty());
+
+        // The source fell silent; the timeout branch calls `flush_if_due`.
+        writer.first_queued_at = Some(Instant::now() - writer.max_delay);
+        writer.flush_if_due();
+
+        assert!(writer.pending.is_empty());
+    }
+
+    #[test]
+    fn test_push_defers_young_batch_and_flushes_full_batch() {
+        let mut mock = MockPostgresClient::new();
+        mock.expect_execute().times(1).returning(|_, _| Ok(1));
+
+        let client: Box<dyn PostgresClient> = Box::new(mock);
+        let mut writer = PostgresWriter::new(client, unreachable_reconnect(), Shutdown::new());
+
+        let event = test_event(1.0);
+        for _ in 0..writer.max_size - 1 {
+            writer.push(&event);
+        }
+        // Below `max_size` and younger than `max_delay`: nothing is written yet.
+        assert_eq!(writer.pending.len(), writer.max_size - 1);
+
+        // Reaching `max_size` flushes immediately.
+        writer.push(&event);
         assert!(writer.pending.is_empty());
     }
 
