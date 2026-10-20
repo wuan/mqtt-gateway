@@ -37,6 +37,7 @@ impl Receiver {
 
         info!("Waiting for messages ...");
 
+        let mut stream_error = None;
         while !self.shutdown.is_requested() {
             // Poll with a timeout so a pending shutdown is observed even when
             // no messages are arriving.
@@ -47,7 +48,11 @@ impl Receiver {
                 Ok(StreamEvent::Disconnected) => self.handle_error(),
                 Err(err) => {
                     warn!("Error reading from MQTT stream: {}", err);
-                    // On error from stream, break out of loop
+                    // A read failure is not recoverable by this loop: stop the
+                    // target writers and report the error so the process exits
+                    // with a non-zero status.
+                    self.shutdown.request();
+                    stream_error = Some(err);
                     break;
                 }
             }
@@ -57,7 +62,10 @@ impl Receiver {
         self.sources.shutdown();
 
         info!("Exiting receiver");
-        Ok(())
+        match stream_error {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 
     fn handle_error(&mut self) {
@@ -137,7 +145,7 @@ mod tests {
 
         let result = receiver.listen();
 
-        assert!(result.is_ok());
+        assert!(result.is_err());
         assert_eq!(handler_ref.lock().unwrap().checked_count(), 1);
     }
 
@@ -150,7 +158,7 @@ mod tests {
 
         let result = receiver.listen();
 
-        assert!(result.is_ok());
+        assert!(result.is_err());
         assert_eq!(handler_ref.lock().unwrap().checked_count(), 0);
     }
 
@@ -224,6 +232,55 @@ mod tests {
 
         let result = receiver.listen();
 
-        assert!(result.is_ok());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_listen_reports_the_stream_error() {
+        let mut mqtt_client = Box::new(crate::domain::MockMqttClient::new());
+        mqtt_client.expect_create().times(1).returning(|| {
+            let mut stream = Box::new(crate::domain::MockStream::new());
+            stream
+                .expect_next()
+                .times(1)
+                .returning(|_| Err(Error::msg("stream failure")));
+            Ok(stream)
+        });
+        mqtt_client
+            .expect_subscribe_many()
+            .times(1)
+            .returning(|_, _| Ok(ServerResponse::default()));
+
+        let receiver = Receiver::new(mqtt_client, sources(), crate::Shutdown::new());
+
+        let result = receiver.listen();
+
+        let err = result.expect_err("a stream read failure must be reported as an error");
+        assert_eq!(err.to_string(), "stream failure");
+    }
+
+    #[test]
+    fn test_listen_requests_shutdown_on_stream_error() {
+        let mut mqtt_client = Box::new(crate::domain::MockMqttClient::new());
+        mqtt_client.expect_create().times(1).returning(|| {
+            let mut stream = Box::new(crate::domain::MockStream::new());
+            stream
+                .expect_next()
+                .times(1)
+                .returning(|_| Err(Error::msg("stream failure")));
+            Ok(stream)
+        });
+        mqtt_client
+            .expect_subscribe_many()
+            .times(1)
+            .returning(|_, _| Ok(ServerResponse::default()));
+
+        let shutdown = crate::Shutdown::new();
+        let receiver = Receiver::new(mqtt_client, sources(), shutdown.clone());
+
+        let result = receiver.listen();
+
+        assert!(result.is_err());
+        assert!(shutdown.is_requested());
     }
 }
