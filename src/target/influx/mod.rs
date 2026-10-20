@@ -121,7 +121,7 @@ fn influxdb_writer(
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => writer.flush_if_due(),
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                writer.flush();
+                writer.drain(&rx);
                 warn!(
                     "InfluxDB: disconnected {} {}",
                     influx_config.url, influx_config.database,
@@ -132,7 +132,7 @@ fn influxdb_writer(
 
         // Check for shutdown request periodically
         if shutdown.is_requested() {
-            writer.flush();
+            writer.drain(&rx);
             info!(
                 "InfluxDB: shutdown requested, exiting writer {} {}",
                 influx_config.url, influx_config.database
@@ -175,6 +175,18 @@ impl Writer {
         if self.start.elapsed() >= self.accumulation_time {
             self.flush();
         }
+    }
+
+    /// Map every event still buffered in the channel into the pending batch
+    /// and write it. Used on shutdown and on channel disconnect so events that
+    /// were queued but not yet received are written instead of dropped.
+    fn drain(&mut self, rx: &Receiver<Arc<LogEvent>>) {
+        while let Ok(event) = rx.try_recv() {
+            if let Some(query) = map_to_query(&event) {
+                self.queue(query);
+            }
+        }
+        self.flush();
     }
 
     /// Flush a pending batch once its accumulation window has elapsed, even
@@ -434,6 +446,57 @@ mod tests {
     }
 
     #[test]
+    fn test_drain_writes_buffered_events_in_one_batch() {
+        let mut mock_client = Box::new(MockInfluxClient::new());
+        mock_client
+            .expect_write()
+            .times(1)
+            .with(function(|points: &Vec<WriteQuery>| points.len() == 3))
+            .returning(|_| Ok("test_data".to_string()));
+
+        let mut writer = Writer::new(mock_client, influx_config(), Duration::from_secs(60));
+
+        let (tx, rx) = sync_channel(100);
+        tx.send(Arc::new(log_event_at(1)))
+            .expect("send first event");
+        tx.send(Arc::new(log_event_at(2)))
+            .expect("send second event");
+        tx.send(Arc::new(log_event_at(3)))
+            .expect("send third event");
+
+        writer.drain(&rx);
+    }
+
+    #[test]
+    fn test_drain_writes_pending_batch_without_buffered_events() {
+        let mut mock_client = Box::new(MockInfluxClient::new());
+        mock_client
+            .expect_write()
+            .times(1)
+            .with(function(|points: &Vec<WriteQuery>| points.len() == 1))
+            .returning(|_| Ok("test_data".to_string()));
+
+        let mut writer = Writer::new(mock_client, influx_config(), Duration::from_secs(60));
+        writer.queries.push(write_query());
+
+        let (_tx, rx) = sync_channel(100);
+
+        writer.drain(&rx);
+    }
+
+    #[test]
+    fn test_drain_without_buffered_events_or_pending_batch_writes_nothing() {
+        let mut mock_client = Box::new(MockInfluxClient::new());
+        mock_client.expect_write().times(0);
+
+        let mut writer = Writer::new(mock_client, influx_config(), Duration::from_secs(0));
+
+        let (_tx, rx) = sync_channel(100);
+
+        writer.drain(&rx);
+    }
+
+    #[test]
     fn test_influxdb_writer_gives_up_after_max_attempts() {
         use std::sync::atomic::{AtomicU32, Ordering};
         use std::sync::Arc;
@@ -571,6 +634,44 @@ mod tests {
         handle
             .join()
             .map_err(|e| anyhow::anyhow!("Thread panicked: {:?}", e))
+    }
+
+    #[test]
+    fn test_spawn_influxdb_writer_drains_buffered_events_on_shutdown() -> anyhow::Result<()> {
+        use std::sync::Mutex;
+
+        let written = Arc::new(Mutex::new(Vec::<usize>::new()));
+        let written_clone = written.clone();
+
+        let mut mock_client = Box::new(MockInfluxClient::new());
+        mock_client
+            .expect_write()
+            .times(1)
+            .returning(move |points| {
+                written_clone.lock().unwrap().push(points.len());
+                Ok("test_data".to_string())
+            });
+
+        let shutdown = Shutdown::new();
+        let (tx, handle) = spawn_writer(mock_client, influx_config(), shutdown.clone());
+
+        tx.send(Arc::new(log_event_at(1)))?;
+        tx.send(Arc::new(log_event_at(2)))?;
+        tx.send(Arc::new(log_event_at(3)))?;
+
+        // Request shutdown while the events are still buffered in the channel.
+        shutdown.request();
+
+        drop(tx);
+
+        handle
+            .join()
+            .map_err(|e| anyhow::anyhow!("Thread panicked: {:?}", e))?;
+
+        let total: usize = written.lock().unwrap().iter().sum();
+        assert_eq!(total, 3, "every buffered event should be written");
+
+        Ok(())
     }
 
     #[test]
