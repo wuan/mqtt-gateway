@@ -165,7 +165,7 @@ mod tests {
         database: "bar"
         "#;
 
-        let result: Target = serde_yaml_ng::from_str(yaml).unwrap();
+        let result: Target = serde_saphyr::from_str(yaml).unwrap();
 
         if let Target::InfluxDB { url, database, .. } = result {
             assert_eq!(url, "foo");
@@ -188,7 +188,7 @@ mod tests {
         password: "qux"
         "#;
 
-        let result: Target = serde_yaml_ng::from_str(yaml).unwrap();
+        let result: Target = serde_saphyr::from_str(yaml).unwrap();
         debug!("{:?}", result);
 
         if let Target::Postgresql {
@@ -225,7 +225,7 @@ mod tests {
             database: "qux"
         "#;
 
-        let result: Source = serde_yaml_ng::from_str(yaml).unwrap();
+        let result: Source = serde_saphyr::from_str(yaml).unwrap();
 
         assert_eq!(result.name, "foo");
         assert_eq!(result.source_type, SourceType::Sensor);
@@ -326,7 +326,7 @@ mod tests {
     sources: []
     "#;
 
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         assert!(config.mqtt_username.is_none());
         assert!(config.mqtt_password.is_none());
     }
@@ -341,7 +341,7 @@ mod tests {
     sources: []
     "#;
 
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(config.mqtt_username.as_deref(), Some("user"));
         assert_eq!(config.mqtt_password.as_deref(), Some("secret"));
     }

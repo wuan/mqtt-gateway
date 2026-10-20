@@ -87,7 +87,7 @@ fn main() -> anyhow::Result<()> {
             config_file_path
         )
     })?;
-    let config: config::Config = serde_yaml_ng::from_str(&config_string)
+    let config: config::Config = serde_saphyr::from_str(&config_string)
         .with_context(|| format!("Failed to parse config file: {}", config_file_path))?;
     config.validate().context("Invalid configuration")?;
 
