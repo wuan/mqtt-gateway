@@ -65,22 +65,36 @@ impl Sources {
     }
 
     pub(crate) fn handle(&self, msg: Message) {
-        let prefix = msg.topic().split('/').next().unwrap_or_default();
         trace!("received from {} - {}", msg.topic(), msg.payload_str());
 
-        let handler = self.get_handler(prefix);
-        if let Some(handler) = handler {
-            match handler.lock() {
-                Ok(mut handler) => handler.check_message(&msg),
-                Err(_) => error!(
-                    "handler for prefix '{}' is poisoned, dropping message on '{}'",
-                    prefix,
-                    msg.topic()
-                ),
+        match self.matching_prefix(msg.topic()) {
+            Some(prefix) => {
+                if let Some(handler) = self.get_handler(prefix) {
+                    match handler.lock() {
+                        Ok(mut handler) => handler.check_message(&msg),
+                        Err(_) => error!(
+                            "handler for prefix '{}' is poisoned, dropping message on '{}'",
+                            prefix,
+                            msg.topic()
+                        ),
+                    }
+                }
             }
-        } else {
-            warn!("unhandled prefix {} from topic {}", prefix, msg.topic());
+            None => warn!("unhandled prefix from topic {}", msg.topic()),
         }
+    }
+
+    /// The configured prefix that matches `topic` on a topic-segment boundary,
+    /// choosing the longest one, or `None` when no configured prefix matches.
+    ///
+    /// A prefix matches when the topic equals it or continues with a `/`, so
+    /// `home/shelly` matches `home/shelly/dev/status` but not `home/shellybox`.
+    pub(crate) fn matching_prefix(&self, topic: &str) -> Option<&str> {
+        self.handler_map
+            .keys()
+            .filter(|prefix| matches_topic_prefix(topic, prefix))
+            .max_by_key(|prefix| prefix.len())
+            .map(String::as_str)
     }
 
     pub(crate) fn get_handler(&self, prefix: &str) -> Option<&Arc<Mutex<dyn CheckMessage>>> {
@@ -94,6 +108,15 @@ impl Sources {
             }
         }
     }
+}
+
+/// Whether `prefix` matches `topic` at a topic-segment boundary: the topic is
+/// exactly the prefix or continues it with a `/` separator.
+fn matches_topic_prefix(topic: &str, prefix: &str) -> bool {
+    topic == prefix
+        || topic
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 #[cfg(test)]
@@ -151,5 +174,156 @@ pub(crate) mod tests {
         }];
 
         Sources::new(sources, crate::Shutdown::new()).expect("failed to create sources")
+    }
+
+    fn sources_with_prefixes(prefixes: &[&str]) -> Sources {
+        let sources = prefixes
+            .iter()
+            .enumerate()
+            .map(|(index, prefix)| Source {
+                name: format!("source-{index}"),
+                prefix: (*prefix).to_string(),
+                source_type: SourceType::Debug,
+                targets: None,
+            })
+            .collect();
+
+        Sources::new(sources, crate::Shutdown::new()).expect("failed to create sources")
+    }
+
+    /// A handler that records the topics it receives, so a test can tell which
+    /// configured prefix a received message was routed to.
+    struct SpyHandler {
+        received: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl CheckMessage for SpyHandler {
+        fn check_message(&mut self, msg: &Message) {
+            self.received
+                .lock()
+                .expect("spy lock poisoned")
+                .push(msg.topic().to_string());
+        }
+
+        fn checked_count(&self) -> u64 {
+            self.received.lock().map_or(0, |seen| seen.len() as u64)
+        }
+
+        fn drop_all(&mut self) {
+            if let Ok(mut seen) = self.received.lock() {
+                seen.clear();
+            }
+        }
+    }
+
+    type Spies = HashMap<String, Arc<Mutex<Vec<String>>>>;
+
+    fn sources_with_spies(prefixes: &[&str]) -> (Sources, Spies) {
+        let mut handler_map: HashMap<String, Arc<Mutex<dyn CheckMessage>>> = HashMap::new();
+        let mut spies: Spies = HashMap::new();
+
+        for prefix in prefixes {
+            let received: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            spies.insert((*prefix).to_string(), Arc::clone(&received));
+            let handler: Arc<Mutex<dyn CheckMessage>> =
+                Arc::new(Mutex::new(SpyHandler { received }));
+            handler_map.insert((*prefix).to_string(), handler);
+        }
+
+        let sources = Sources {
+            handler_map,
+            handles: Vec::new(),
+            topics: Vec::new(),
+            qoss: Vec::new(),
+        };
+
+        (sources, spies)
+    }
+
+    #[test]
+    fn test_matching_prefix_uses_longest_segment_boundary_match() {
+        let sources = sources_with_prefixes(&["home", "home/shelly"]);
+
+        assert_eq!(
+            sources.matching_prefix("home/shelly/dev/status"),
+            Some("home/shelly")
+        );
+        assert_eq!(sources.matching_prefix("home/other/state"), Some("home"));
+    }
+
+    #[test]
+    fn test_matching_prefix_routes_a_multi_segment_prefix() {
+        let sources = sources_with_prefixes(&["home/shelly"]);
+
+        assert_eq!(
+            sources.matching_prefix("home/shelly/dev/status/switch:0"),
+            Some("home/shelly")
+        );
+    }
+
+    #[test]
+    fn test_matching_prefix_matches_the_exact_topic() {
+        let sources = sources_with_prefixes(&["home/shelly"]);
+
+        assert_eq!(sources.matching_prefix("home/shelly"), Some("home/shelly"));
+    }
+
+    #[test]
+    fn test_matching_prefix_does_not_match_a_partial_segment() {
+        let sources = sources_with_prefixes(&["home/shelly"]);
+
+        assert_eq!(sources.matching_prefix("home/shellybox/state"), None);
+    }
+
+    #[test]
+    fn test_matching_prefix_keeps_single_segment_behavior() {
+        let sources = sources_with_prefixes(&["shellies"]);
+
+        assert_eq!(
+            sources.matching_prefix("shellies/device/relay/0"),
+            Some("shellies")
+        );
+    }
+
+    #[test]
+    fn test_matching_prefix_is_none_for_an_unrelated_topic() {
+        let sources = sources_with_prefixes(&["home"]);
+
+        assert_eq!(sources.matching_prefix("unknown/topic"), None);
+    }
+
+    #[test]
+    fn test_handle_delivers_to_the_longest_matching_prefix() {
+        let (sources, spies) = sources_with_spies(&["home", "home/shelly"]);
+
+        sources.handle(Message::new("home/shelly/dev/status/switch:0", "on", QOS_1));
+
+        assert_eq!(
+            *spies["home/shelly"].lock().unwrap(),
+            vec!["home/shelly/dev/status/switch:0".to_string()]
+        );
+        assert!(spies["home"].lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_handle_delivers_to_the_shorter_prefix_subtree() {
+        let (sources, spies) = sources_with_spies(&["home", "home/shelly"]);
+
+        sources.handle(Message::new("home/other/state", "x", QOS_1));
+
+        assert_eq!(
+            *spies["home"].lock().unwrap(),
+            vec!["home/other/state".to_string()]
+        );
+        assert!(spies["home/shelly"].lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_handle_drops_a_topic_that_only_matches_a_partial_segment() {
+        let (sources, spies) = sources_with_spies(&["home/shelly"]);
+
+        sources.handle(Message::new("home/shellybox/state", "x", QOS_1));
+
+        assert!(spies["home/shelly"].lock().unwrap().is_empty());
     }
 }

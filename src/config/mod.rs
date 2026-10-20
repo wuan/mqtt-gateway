@@ -104,6 +104,8 @@ impl Config {
     /// drop every event, so reject such a configuration up front.
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
         for source in &self.sources {
+            validate_source_prefix(&source.name, &source.prefix)?;
+
             let has_postgres = source.targets.as_ref().is_some_and(|targets| {
                 targets
                     .iter()
@@ -125,6 +127,27 @@ impl Config {
 
         Ok(())
     }
+}
+
+/// Reject a source prefix that cannot be subscribed or routed deterministically.
+///
+/// A prefix is one or more topic segments, so it must not be empty, start or
+/// end with `/`, or contain the MQTT wildcards `+` or `#`. The error names the
+/// offending source so the operator can correct it before the gateway starts.
+fn validate_source_prefix(name: &str, prefix: &str) -> anyhow::Result<()> {
+    if prefix.is_empty() {
+        anyhow::bail!("source '{name}' has an empty prefix");
+    }
+    if prefix.starts_with('/') || prefix.ends_with('/') {
+        anyhow::bail!("source '{name}' has prefix '{prefix}' with a leading or trailing '/'");
+    }
+    if prefix.contains('+') || prefix.contains('#') {
+        anyhow::bail!(
+            "source '{name}' has prefix '{prefix}' containing an MQTT wildcard ('+' or '#')"
+        );
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -362,5 +385,64 @@ mod tests {
         };
 
         assert!(config.validate().is_ok());
+    }
+
+    fn config_with_prefix(prefix: &str) -> Config {
+        Config {
+            sources: vec![Source {
+                name: "test".to_string(),
+                source_type: SourceType::Debug,
+                prefix: prefix.to_string(),
+                targets: None,
+            }],
+            mqtt_url: "mqtt://localhost:1883".to_string(),
+            mqtt_client_id: "test".to_string(),
+            mqtt_username: None,
+            mqtt_password: None,
+        }
+    }
+
+    #[test]
+    fn test_validate_rejects_empty_prefix() {
+        let message = config_with_prefix("").validate().unwrap_err().to_string();
+
+        assert!(
+            message.contains("'test'"),
+            "error should name the source: {message}"
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_boundary_slash_prefix() {
+        for prefix in ["/home", "home/"] {
+            let message = config_with_prefix(prefix)
+                .validate()
+                .unwrap_err()
+                .to_string();
+            assert!(
+                message.contains("'test'"),
+                "error for '{prefix}' should name the source: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_rejects_wildcard_prefix() {
+        for prefix in ["home/+", "home/#", "+", "#"] {
+            assert!(
+                config_with_prefix(prefix).validate().is_err(),
+                "expected the prefix '{prefix}' to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_accepts_single_and_multi_segment_prefixes() {
+        for prefix in ["home", "home/shelly"] {
+            assert!(
+                config_with_prefix(prefix).validate().is_ok(),
+                "expected the prefix '{prefix}' to be accepted"
+            );
+        }
     }
 }

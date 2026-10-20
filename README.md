@@ -72,6 +72,11 @@ sources:
 - **PostgreSQL targets** are only supported for `sensor` and `shelly` sources,
   because only those provide the required `location`/`sensor`/`value` schema.
   Set `tls: true` to require a verified TLS connection.
+- **Source `prefix`**: one or more topic segments separated by `/` (for example
+  `home/shelly`). A prefix must not be empty, start or end with `/`, or contain
+  the wildcards `+` or `#`; configuration validation rejects those at startup.
+  Each received message is routed to the source with the longest prefix that
+  matches the topic on a segment boundary.
 - **Environment variables**: any `${VAR_NAME}` placeholder in the configuration
   file is replaced with the value of that environment variable. Referencing an
   undefined variable is a configuration error. This lets secrets stay out of the
