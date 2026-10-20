@@ -7,7 +7,8 @@ pub(crate) static EVENTS_DROPPED: AtomicU64 = AtomicU64::new(0);
 pub(crate) static INVALID_TIMESTAMP_EVENTS: AtomicU64 = AtomicU64::new(0);
 /// Cumulative number of failed InfluxDB batch writes (after retries).
 pub(crate) static INFLUX_WRITE_FAILURES: AtomicU64 = AtomicU64::new(0);
-/// Cumulative number of failed PostgreSQL batch writes (after retries).
+/// Cumulative number of failed PostgreSQL writes (a whole batch or an isolated
+/// row that could not be written, after retries).
 pub(crate) static POSTGRES_WRITE_FAILURES: AtomicU64 = AtomicU64::new(0);
 /// Cumulative number of successful MQTT reconnections.
 pub(crate) static MQTT_RECONNECTS: AtomicU64 = AtomicU64::new(0);
