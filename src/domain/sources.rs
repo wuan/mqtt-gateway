@@ -102,7 +102,18 @@ impl Sources {
     }
 
     pub(crate) fn shutdown(self) {
-        for handle in self.handles {
+        // The source handlers own the target `Sender`s. Drop them before
+        // joining the writer threads so a writer that only keeps running
+        // because of a live sender observes the closed channel and exits;
+        // otherwise `join` could block forever.
+        let Self {
+            handler_map,
+            handles,
+            ..
+        } = self;
+        drop(handler_map);
+
+        for handle in handles {
             if handle.join().is_err() {
                 error!("target writer thread panicked during shutdown");
             }
@@ -123,6 +134,8 @@ fn matches_topic_prefix(topic: &str, prefix: &str) -> bool {
 pub(crate) mod tests {
     use super::*;
     use crate::config::SourceType;
+    use std::sync::mpsc::SyncSender;
+    use std::thread;
 
     #[test]
     fn test_sources_creation() {
@@ -161,6 +174,47 @@ pub(crate) mod tests {
     #[test]
     fn test_shutdown() {
         let sources = sources();
+
+        sources.shutdown();
+    }
+
+    /// A handler that owns a target sender, mirroring how the real handlers
+    /// keep their targets' channels open.
+    struct SenderHandler {
+        _tx: SyncSender<()>,
+    }
+
+    impl CheckMessage for SenderHandler {
+        fn check_message(&mut self, _msg: &Message) {}
+
+        #[cfg(test)]
+        fn checked_count(&self) -> u64 {
+            0
+        }
+
+        #[cfg(test)]
+        fn drop_all(&mut self) {}
+    }
+
+    #[test]
+    fn test_shutdown_releases_handlers_before_joining_writers() {
+        // The writer exits only once every sender is dropped and the channel
+        // closes, so `shutdown` hangs unless it releases the handler first.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let handle = thread::spawn(move || while rx.recv().is_ok() {});
+
+        let mut handler_map: HashMap<String, Arc<Mutex<dyn CheckMessage>>> = HashMap::new();
+        handler_map.insert(
+            "bar".to_string(),
+            Arc::new(Mutex::new(SenderHandler { _tx: tx })),
+        );
+
+        let sources = Sources {
+            handler_map,
+            handles: vec![handle],
+            topics: Vec::new(),
+            qoss: Vec::new(),
+        };
 
         sources.shutdown();
     }
