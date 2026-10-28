@@ -48,6 +48,34 @@ pub enum SourceType {
     Debug,
 }
 
+/// How the payload of a topic selected by a [`Pattern`] is decoded.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub enum ValueFormat {
+    /// A JSON object `{ sensor, time, value }` (the default sensor encoding).
+    #[serde(rename = "json")]
+    #[default]
+    Json,
+    /// A bare floating point number, for example `19.45`.
+    #[serde(rename = "float")]
+    Float,
+}
+
+/// Selects how the payload of matching topics is decoded.
+///
+/// `topic` is an MQTT topic filter (`+` matches a single level, `#` matches the
+/// remaining levels). The first pattern whose filter matches a message wins;
+/// topics that match no pattern keep the default JSON decoding.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Pattern {
+    pub(crate) topic: String,
+    #[serde(default)]
+    pub(crate) format: ValueFormat,
+    /// Value of the `sensor` tag for `float` patterns. Defaults to the topic's
+    /// location segment when omitted.
+    #[serde(default)]
+    pub(crate) sensor: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Source {
     pub(crate) name: String,
@@ -55,6 +83,8 @@ pub struct Source {
     pub(crate) source_type: SourceType,
     pub(crate) prefix: String,
     pub(crate) targets: Option<Vec<Target>>,
+    #[serde(default)]
+    pub(crate) patterns: Option<Vec<Pattern>>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
@@ -105,6 +135,7 @@ impl Config {
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
         for source in &self.sources {
             validate_source_prefix(&source.name, &source.prefix)?;
+            validate_patterns(&source.name, source.patterns.as_deref())?;
 
             let has_postgres = source.targets.as_ref().is_some_and(|targets| {
                 targets
@@ -145,6 +176,34 @@ fn validate_source_prefix(name: &str, prefix: &str) -> anyhow::Result<()> {
         anyhow::bail!(
             "source '{name}' has prefix '{prefix}' containing an MQTT wildcard ('+' or '#')"
         );
+    }
+
+    Ok(())
+}
+
+/// Reject a pattern topic filter that cannot be matched deterministically.
+///
+/// A filter is one or more non-empty topic segments. The multi-level wildcard
+/// `#` is only valid as the final segment. The error names the offending source
+/// so the operator can correct it before the gateway starts.
+fn validate_patterns(name: &str, patterns: Option<&[Pattern]>) -> anyhow::Result<()> {
+    let Some(patterns) = patterns else {
+        return Ok(());
+    };
+
+    for pattern in patterns {
+        let topic = &pattern.topic;
+        if topic.is_empty() {
+            anyhow::bail!("source '{name}' has a pattern with an empty topic");
+        }
+        if topic.starts_with('/') || topic.ends_with('/') || topic.contains("//") {
+            anyhow::bail!("source '{name}' has pattern topic '{topic}' with an empty segment");
+        }
+        if topic.split('/').any(|segment| segment == "#") && !topic.ends_with("#") {
+            anyhow::bail!(
+                "source '{name}' has pattern topic '{topic}' where '#' is not the final segment"
+            );
+        }
     }
 
     Ok(())
@@ -245,6 +304,46 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_deserialize_source_with_float_pattern() -> Result<()> {
+        let yaml = r#"
+        name: "sensors"
+        type: "sensor"
+        prefix: "sensors"
+        patterns:
+          - topic: "sensors/+/temperature"
+            format: "float"
+            sensor: "raw"
+        "#;
+
+        let result: Source = serde_saphyr::from_str(yaml).unwrap();
+        let patterns = result.patterns.unwrap();
+        assert_eq!(patterns.len(), 1);
+        assert_eq!(patterns[0].topic, "sensors/+/temperature");
+        assert_eq!(patterns[0].format, ValueFormat::Float);
+        assert_eq!(patterns[0].sensor.as_deref(), Some("raw"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_source_pattern_defaults_to_json() -> Result<()> {
+        let yaml = r#"
+        name: "sensors"
+        type: "sensor"
+        prefix: "sensors"
+        patterns:
+          - topic: "sensors/+/temperature"
+        "#;
+
+        let result: Source = serde_saphyr::from_str(yaml).unwrap();
+        let patterns = result.patterns.unwrap();
+        assert_eq!(patterns[0].format, ValueFormat::Json);
+        assert!(patterns[0].sensor.is_none());
+
+        Ok(())
+    }
+
     fn config(source_type: SourceType, target: Target) -> Config {
         Config {
             sources: vec![Source {
@@ -252,6 +351,7 @@ mod tests {
                 source_type,
                 prefix: "test".to_string(),
                 targets: Some(vec![target]),
+                patterns: None,
             }],
             mqtt_url: "mqtt://localhost:1883".to_string(),
             mqtt_client_id: "test".to_string(),
@@ -377,6 +477,7 @@ mod tests {
                 source_type: SourceType::OpenDTU,
                 prefix: "test".to_string(),
                 targets: None,
+                patterns: None,
             }],
             mqtt_url: "mqtt://localhost:1883".to_string(),
             mqtt_client_id: "test".to_string(),
@@ -394,6 +495,7 @@ mod tests {
                 source_type: SourceType::Debug,
                 prefix: prefix.to_string(),
                 targets: None,
+                patterns: None,
             }],
             mqtt_url: "mqtt://localhost:1883".to_string(),
             mqtt_client_id: "test".to_string(),
@@ -442,6 +544,66 @@ mod tests {
             assert!(
                 config_with_prefix(prefix).validate().is_ok(),
                 "expected the prefix '{prefix}' to be accepted"
+            );
+        }
+    }
+
+    fn float_pattern(topic: &str) -> Pattern {
+        Pattern {
+            topic: topic.to_string(),
+            format: ValueFormat::Float,
+            sensor: None,
+        }
+    }
+
+    fn config_with_patterns(patterns: Vec<Pattern>) -> Config {
+        let mut config = config_with_prefix("sensors");
+        config.sources[0].patterns = Some(patterns);
+        config
+    }
+
+    #[test]
+    fn test_validate_rejects_empty_pattern_topic() {
+        let message = config_with_patterns(vec![float_pattern("")])
+            .validate()
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            message.contains("'test'"),
+            "error should name the source: {message}"
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_pattern_with_empty_segment() {
+        for topic in ["/sensors/+", "sensors//+", "sensors/+/"] {
+            assert!(
+                config_with_patterns(vec![float_pattern(topic)])
+                    .validate()
+                    .is_err(),
+                "expected pattern topic '{topic}' to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_rejects_non_final_hash() {
+        assert!(
+            config_with_patterns(vec![float_pattern("sensors/#/temperature")])
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_validate_accepts_valid_patterns() {
+        for topic in ["sensors/+/temperature", "sensors/#", "#"] {
+            assert!(
+                config_with_patterns(vec![float_pattern(topic)])
+                    .validate()
+                    .is_ok(),
+                "expected pattern topic '{topic}' to be accepted"
             );
         }
     }
