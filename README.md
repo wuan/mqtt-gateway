@@ -29,8 +29,11 @@ sources:
     prefix: "sensors"
     patterns:                          # optional; selects non-JSON payloads
       - topic: "sensors/+/temperature" # MQTT filter (+ one level, # the rest)
-        format: "float"                # float = bare number, json = default
+        format: "float"                # float = bare number (json = default)
         sensor: "raw"                  # optional `sensor` tag, defaults to location
+      - topic: "sensors/+/count"       # integer payloads
+        format: "int"                  # int = bare signed integer
+        sensor: "raw"
     targets:
       - type: "influxdb"
         url: "http://<host>:8086"
@@ -84,11 +87,14 @@ sources:
 - **Sensor `patterns`**: an optional list of MQTT topic filters that select how a
   message under the prefix is decoded. Each entry has a `topic` filter (`+`
   matches one level, `#` matches the remaining levels) and a `format` of `json`
-  (the default `{ sensor, time, value }` object) or `float` (a bare number such
-  as `19.45`). The first matching pattern wins and unmatched topics keep the
-  default JSON decoding. For `float` patterns an optional `sensor` tag can be
-  set (it defaults to the topic's location segment); the reading is stamped with
-  the receive time because a bare number carries no timestamp.
+  (the default `{ sensor, time, value }` object), `float` (a bare number such as
+  `19.45`), or `int` (a bare signed integer such as `42`). The first matching
+  pattern wins and unmatched topics keep the default JSON decoding. For `float`
+  and `int` patterns an optional `sensor` tag can be set (it defaults to the
+  topic's location segment); the reading is stamped with the receive time because
+  a bare number carries no timestamp. An `int` pattern only accepts strict
+  integers: a payload with a fraction or exponent (for example `19.0` or `1.9e1`)
+  is dropped with a warning.
 - **Environment variables**: any `${VAR_NAME}` placeholder in the configuration
   file is replaced with the value of that environment variable. Referencing an
   undefined variable is a configuration error. This lets secrets stay out of the

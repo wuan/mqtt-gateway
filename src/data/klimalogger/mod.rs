@@ -97,11 +97,13 @@ impl SensorLogger {
         }
     }
 
-    /// Decode a bare floating point payload selected by a `float` pattern.
+    /// Emit an event for a bare scalar payload selected by `pattern`.
     ///
-    /// The payload carries no timestamp, so the event is stamped with the
-    /// receive time and the freshness check is skipped.
-    fn handle_float(&self, msg: &Message, pattern: &Pattern) {
+    /// Splits the topic into its location and measurement segments, warns and
+    /// drops when either is missing, and otherwise logs the match and sends the
+    /// event stamped with the receive time and tagged with `location` and a
+    /// `sensor` tag (the pattern's value or the location default).
+    fn handle_scalar(&self, msg: &Message, pattern: &Pattern, kind: &str, value: Number) {
         let mut split = msg.topic().split("/");
 
         let location = split.nth(1);
@@ -110,13 +112,41 @@ impl SensorLogger {
             (Some(location), Some(measurement)) => (location, measurement),
             _ => {
                 warn!(
-                    "sensor float: topic '{}' has no location/measurement",
+                    "sensor {}: topic '{}' has no location/measurement",
+                    kind,
                     msg.topic()
                 );
                 return;
             }
         };
 
+        let sensor = pattern.sensor.as_deref().unwrap_or(location);
+        debug!(
+            "sensor {}: pattern '{}' matched topic '{}': {:?} ({}/{})",
+            kind,
+            pattern.topic,
+            msg.topic(),
+            value,
+            location,
+            measurement,
+        );
+        let log_event = LogEvent::new_value_from_ref(
+            measurement.to_string(),
+            chrono::offset::Utc::now().timestamp(),
+            vec![("location", location), ("sensor", sensor)]
+                .into_iter()
+                .collect(),
+            value,
+        );
+
+        send_event(&self.txs, Arc::new(log_event));
+    }
+
+    /// Decode a bare floating point payload selected by a `float` pattern.
+    ///
+    /// The payload carries no timestamp, so the event is stamped with the
+    /// receive time and the freshness check is skipped.
+    fn handle_float(&self, msg: &Message, pattern: &Pattern) {
         let value = match msg.payload_str().parse::<f64>() {
             Ok(value) => value,
             Err(error) => {
@@ -130,17 +160,29 @@ impl SensorLogger {
             }
         };
 
-        let sensor = pattern.sensor.as_deref().unwrap_or(location);
-        let log_event = LogEvent::new_value_from_ref(
-            measurement.to_string(),
-            chrono::offset::Utc::now().timestamp(),
-            vec![("location", location), ("sensor", sensor)]
-                .into_iter()
-                .collect(),
-            Number::Float(value),
-        );
+        self.handle_scalar(msg, pattern, "float", Number::Float(value));
+    }
 
-        send_event(&self.txs, Arc::new(log_event));
+    /// Decode a bare integer payload selected by an `int` pattern.
+    ///
+    /// The payload carries no timestamp, so the event is stamped with the
+    /// receive time and the freshness check is skipped. Only strict integers are
+    /// accepted; a value with a fraction or exponent is dropped.
+    fn handle_int(&self, msg: &Message, pattern: &Pattern) {
+        let value = match msg.payload_str().parse::<i64>() {
+            Ok(value) => value,
+            Err(error) => {
+                warn!(
+                    "sensor int: cannot parse '{}' as integer (topic: {}): {}",
+                    msg.payload_str(),
+                    msg.topic(),
+                    error
+                );
+                return;
+            }
+        };
+
+        self.handle_scalar(msg, pattern, "int", Number::Int(value));
     }
 }
 
@@ -183,10 +225,29 @@ impl CheckMessage for SensorLogger {
             .iter()
             .find(|pattern| topic_filter_matches(&pattern.topic, msg.topic()))
         {
-            if pattern.format == ValueFormat::Float {
-                self.handle_float(msg, pattern);
-                return;
+            debug!(
+                "sensor pattern '{}' matched topic '{}' with format {:?}",
+                pattern.topic,
+                msg.topic(),
+                pattern.format,
+            );
+
+            match pattern.format {
+                ValueFormat::Float => {
+                    self.handle_float(msg, pattern);
+                    return;
+                }
+                ValueFormat::Int => {
+                    self.handle_int(msg, pattern);
+                    return;
+                }
+                ValueFormat::Json => {}
             }
+        } else if !self.patterns.is_empty() {
+            debug!(
+                "no sensor pattern matched topic '{}'; using JSON decoding",
+                msg.topic()
+            );
         }
 
         self.handle_json(msg);
@@ -348,6 +409,14 @@ mod tests {
         }
     }
 
+    fn int_pattern(topic: &str, sensor: Option<&str>) -> Pattern {
+        Pattern {
+            topic: topic.to_string(),
+            format: ValueFormat::Int,
+            sensor: sensor.map(str::to_string),
+        }
+    }
+
     #[test]
     fn test_topic_filter_matches() {
         assert!(topic_filter_matches(
@@ -392,6 +461,103 @@ mod tests {
         assert_eq!(event.tags.get("location").unwrap(), "kitchen");
         assert_eq!(event.tags.get("sensor").unwrap(), "raw");
         assert_eq!(event.fields.get("value").unwrap(), &Number::Float(19.45));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_message_parses_int_pattern() -> Result<()> {
+        let (tx, rx) = sync_channel(100);
+        let patterns = vec![int_pattern("sensors/+/count", Some("raw"))];
+        let mut logger = SensorLogger::new(vec![tx], patterns);
+
+        let before = chrono::offset::Utc::now().timestamp();
+        logger.check_message(&Message::new("sensors/kitchen/count", "42", QOS_1));
+
+        let event = rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        assert_eq!(event.measurement, "count");
+        assert_eq!(event.tags.get("location").unwrap(), "kitchen");
+        assert_eq!(event.tags.get("sensor").unwrap(), "raw");
+        assert_eq!(event.fields.get("value").unwrap(), &Number::Int(42));
+        assert!(event.timestamp >= before);
+        assert!(event.timestamp <= chrono::offset::Utc::now().timestamp());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_message_int_pattern_accepts_negative() -> Result<()> {
+        let (tx, rx) = sync_channel(100);
+        let patterns = vec![int_pattern("sensors/+/count", None)];
+        let mut logger = SensorLogger::new(vec![tx], patterns);
+
+        logger.check_message(&Message::new("sensors/kitchen/count", "-3", QOS_1));
+
+        let event = rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        assert_eq!(event.fields.get("value").unwrap(), &Number::Int(-3));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_message_int_pattern_drops_non_integers() {
+        for payload in ["19.0", "1.9e1", "not-a-number"] {
+            let (tx, rx) = sync_channel(100);
+            let patterns = vec![int_pattern("sensors/+/count", None)];
+            let mut logger = SensorLogger::new(vec![tx], patterns);
+
+            logger.check_message(&Message::new("sensors/kitchen/count", payload, QOS_1));
+
+            assert!(
+                rx.try_recv().is_err(),
+                "expected payload '{payload}' to be dropped"
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_message_int_pattern_without_location_is_dropped() {
+        let (tx, rx) = sync_channel(100);
+        // A topic with no location or measurement segment.
+        let patterns = vec![int_pattern("#", None)];
+        let mut logger = SensorLogger::new(vec![tx], patterns);
+
+        logger.check_message(&Message::new("count", "42", QOS_1));
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_check_message_int_pattern_defaults_sensor_to_location() -> Result<()> {
+        let (tx, rx) = sync_channel(100);
+        let patterns = vec![int_pattern("sensors/+/count", None)];
+        let mut logger = SensorLogger::new(vec![tx], patterns);
+
+        logger.check_message(&Message::new("sensors/kitchen/count", "42", QOS_1));
+
+        let event = rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        assert_eq!(event.tags.get("sensor").unwrap(), "kitchen");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_message_unmatched_int_topic_uses_json() -> Result<()> {
+        let (tx, rx) = sync_channel(100);
+        // The pattern selects only count, so temperature keeps the JSON path.
+        let patterns = vec![int_pattern("sensors/+/count", Some("raw"))];
+        let mut logger = SensorLogger::new(vec![tx], patterns);
+
+        let timestamp = chrono::offset::Utc::now().timestamp();
+        let payload = format!(
+            "{{\"sensor\": \"BME680\", \"time\": {}, \"value\": 42.0}}",
+            timestamp
+        );
+        logger.check_message(&Message::new("sensors/kitchen/temperature", payload, QOS_1));
+
+        let event = rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        assert_eq!(event.measurement, "temperature");
+        assert_eq!(event.tags.get("sensor").unwrap(), "BME680");
 
         Ok(())
     }

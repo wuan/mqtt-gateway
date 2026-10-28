@@ -58,6 +58,9 @@ pub enum ValueFormat {
     /// A bare floating point number, for example `19.45`.
     #[serde(rename = "float")]
     Float,
+    /// A bare signed integer, for example `42`.
+    #[serde(rename = "int")]
+    Int,
 }
 
 /// Selects how the payload of matching topics is decoded.
@@ -70,8 +73,8 @@ pub struct Pattern {
     pub(crate) topic: String,
     #[serde(default)]
     pub(crate) format: ValueFormat,
-    /// Value of the `sensor` tag for `float` patterns. Defaults to the topic's
-    /// location segment when omitted.
+    /// Value of the `sensor` tag for `float` and `int` patterns. Defaults to the
+    /// topic's location segment when omitted.
     #[serde(default)]
     pub(crate) sensor: Option<String>,
 }
@@ -321,6 +324,28 @@ mod tests {
         assert_eq!(patterns.len(), 1);
         assert_eq!(patterns[0].topic, "sensors/+/temperature");
         assert_eq!(patterns[0].format, ValueFormat::Float);
+        assert_eq!(patterns[0].sensor.as_deref(), Some("raw"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_deserialize_source_with_int_pattern() -> Result<()> {
+        let yaml = r#"
+        name: "sensors"
+        type: "sensor"
+        prefix: "sensors"
+        patterns:
+          - topic: "sensors/+/count"
+            format: "int"
+            sensor: "raw"
+        "#;
+
+        let result: Source = serde_saphyr::from_str(yaml).unwrap();
+        let patterns = result.patterns.unwrap();
+        assert_eq!(patterns.len(), 1);
+        assert_eq!(patterns[0].topic, "sensors/+/count");
+        assert_eq!(patterns[0].format, ValueFormat::Int);
         assert_eq!(patterns[0].sensor.as_deref(), Some("raw"));
 
         Ok(())
