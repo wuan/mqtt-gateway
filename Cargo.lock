@@ -1199,7 +1199,7 @@ dependencies = [
 
 [[package]]
 name = "mqtt-gateway"
-version = "0.6.18"
+version = "0.6.19"
 dependencies = [
  "anyhow",
  "async-compat",
