@@ -29,7 +29,11 @@ impl Sources {
             let targets = source.targets.unwrap_or_default();
             let (logger, mut source_handles) = match source.source_type {
                 SourceType::Shelly => shelly::create_logger(targets, shutdown.clone()),
-                SourceType::Sensor => klimalogger::create_logger(targets, shutdown.clone()),
+                SourceType::Sensor => klimalogger::create_logger(
+                    targets,
+                    shutdown.clone(),
+                    source.patterns.clone().unwrap_or_default(),
+                ),
                 SourceType::OpenDTU => opendtu::create_logger(targets, shutdown.clone()),
                 SourceType::OpenMqttGateway => {
                     openmqttgateway::create_logger(targets, shutdown.clone())
@@ -225,6 +229,7 @@ pub(crate) mod tests {
             prefix: "bar".to_string(),
             source_type: SourceType::Debug,
             targets: None,
+            patterns: None,
         }];
 
         Sources::new(sources, crate::Shutdown::new()).expect("failed to create sources")
@@ -239,6 +244,7 @@ pub(crate) mod tests {
                 prefix: (*prefix).to_string(),
                 source_type: SourceType::Debug,
                 targets: None,
+                patterns: None,
             })
             .collect();
 
