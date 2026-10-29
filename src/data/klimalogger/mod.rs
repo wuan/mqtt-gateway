@@ -42,59 +42,85 @@ impl SensorLogger {
     }
 
     /// Decode the default JSON payload `{ sensor, time, value }`.
+    ///
+    /// A payload that is not JSON at all is expected on a shared source prefix,
+    /// so it is ignored with a debug log. Valid JSON that does not match the
+    /// expected shape is warned about.
     fn handle_json(&self, msg: &Message) {
+        let result = match parse(msg) {
+            Ok(result) => result,
+            Err(error) => {
+                if is_non_json(&error) {
+                    debug!(
+                        "ignoring non-JSON payload on topic '{}': {}",
+                        msg.topic(),
+                        error
+                    );
+                } else {
+                    warn!("FAILED: parsing '{}': {}", msg.topic(), error);
+                }
+                return;
+            }
+        };
+
         let mut split = msg.topic().split("/");
 
         let location = split.nth(1);
         let measurement = split.next();
-        let result = parse(msg);
-        if let (Some(location), Some(measurement), Ok(result)) = (location, measurement, &result) {
-            let date_time = match Self::convert_timestamp(result.timestamp) {
-                Some(date_time) => date_time,
-                None => {
-                    warn!(
-                        "invalid timestamp {} from {}",
-                        result.timestamp,
-                        msg.topic()
-                    );
-                    return;
-                }
-            };
-
-            let now = chrono::offset::Utc::now();
-            let difference = now - date_time;
-
-            let log_message = format!(
-                "Sensor {} \"{}\": {:?} {:.2}s",
-                location,
-                measurement,
-                result,
-                difference.num_milliseconds() as f32 / 1000.0,
-            );
-
-            if difference.num_seconds().abs() > MAX_TIME_OFFSET_SECONDS {
+        let (location, measurement) = match (location, measurement) {
+            (Some(location), Some(measurement)) => (location, measurement),
+            _ => {
                 warn!(
-                    "*** HIGH TIME OFFSET *** {} : {} - {}",
-                    log_message, now, date_time
+                    "FAILED: topic '{}' has no location/measurement",
+                    msg.topic()
                 );
                 return;
             }
+        };
 
-            debug!("{}", log_message);
+        let date_time = match Self::convert_timestamp(result.timestamp) {
+            Some(date_time) => date_time,
+            None => {
+                warn!(
+                    "invalid timestamp {} from {}",
+                    result.timestamp,
+                    msg.topic()
+                );
+                return;
+            }
+        };
 
-            let log_event = LogEvent::new_value_from_ref(
-                measurement.to_string(),
-                date_time.timestamp(),
-                vec![("location", location), ("sensor", &result.sensor)]
-                    .into_iter()
-                    .collect(),
-                Number::Float(result.value),
+        let now = chrono::offset::Utc::now();
+        let difference = now - date_time;
+
+        let log_message = format!(
+            "Sensor {} \"{}\": {:?} {:.2}s",
+            location,
+            measurement,
+            result,
+            difference.num_milliseconds() as f32 / 1000.0,
+        );
+
+        if difference.num_seconds().abs() > MAX_TIME_OFFSET_SECONDS {
+            warn!(
+                "*** HIGH TIME OFFSET *** {} : {} - {}",
+                log_message, now, date_time
             );
-
-            send_event(&self.txs, Arc::new(log_event));
-        } else {
-            warn!("FAILED: {:?}, {:?}, {:?}", location, measurement, result);
+            return;
         }
+
+        debug!("{}", log_message);
+
+        let log_event = LogEvent::new_value_from_ref(
+            measurement.to_string(),
+            date_time.timestamp(),
+            vec![("location", location), ("sensor", &result.sensor)]
+                .into_iter()
+                .collect(),
+            Number::Float(result.value),
+        );
+
+        send_event(&self.txs, Arc::new(log_event));
     }
 
     /// Emit an event for a bare scalar payload selected by `pattern`.
@@ -264,8 +290,17 @@ impl CheckMessage for SensorLogger {
     }
 }
 
-pub fn parse(msg: &Message) -> Result<Data> {
-    Ok(serde_json::from_slice::<Data>(msg.payload())?)
+/// Whether a decode failure means the payload is not JSON at all, as opposed to
+/// valid JSON that does not match the `{ sensor, time, value }` shape.
+fn is_non_json(error: &serde_json::Error) -> bool {
+    matches!(
+        error.classify(),
+        serde_json::error::Category::Syntax | serde_json::error::Category::Eof
+    )
+}
+
+pub fn parse(msg: &Message) -> Result<Data, serde_json::Error> {
+    serde_json::from_slice::<Data>(msg.payload())
 }
 
 #[cfg(test)]
@@ -306,6 +341,43 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_is_non_json() {
+        let syntax = parse(&Message::new("klimalogger", "heating", QOS_1)).unwrap_err();
+        assert!(is_non_json(&syntax));
+
+        let wrong_shape = parse(&Message::new("klimalogger", "42", QOS_1)).unwrap_err();
+        assert!(!is_non_json(&wrong_shape));
+    }
+
+    #[test]
+    fn test_check_message_ignores_non_json_payload() {
+        let (tx, rx) = sync_channel(100);
+        let mut logger = SensorLogger::new(vec![tx], vec![]);
+
+        logger.check_message(&Message::new(
+            "klimalogger/location/temperature",
+            "heating",
+            QOS_1,
+        ));
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_check_message_drops_wrong_shape_json() {
+        let (tx, rx) = sync_channel(100);
+        let mut logger = SensorLogger::new(vec![tx], vec![]);
+
+        logger.check_message(&Message::new(
+            "klimalogger/location/temperature",
+            "{\"a\":1}",
+            QOS_1,
+        ));
+
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
